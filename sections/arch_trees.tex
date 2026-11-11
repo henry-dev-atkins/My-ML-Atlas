@@ -1,0 +1,657 @@
+\chapter{Tree-Based Models and Ensembles}
+\label{chap:trees}
+A decision tree models a prediction through successive conditional rules.
+Tree ensembles then address different weaknesses of individual trees: bagging reduces instability by averaging diverse fits, whereas boosting adds functions that improve a loss.
+This section develops their data flows, inductive biases, design choices and research trade-offs.
+For the broader role of inductive bias, see \cref{sec:nfl-inductive-bias-the-assumptions-that-make-learning-possible}; for the compact model-family comparison, see \cref{sec:models-decision-trees-bagging-and-boosting}.
+
+\section{A single decision tree: rules become regions}
+\label{sec:trees-a-single-decision-tree-rules-become-regions}
+Consider predicting machine-failure risk from temperature $T$ and vibration $V$.
+A tree might apply ``$V>6$?'', then (if not) ``$T>70$?'', with a class or risk estimate at the end of each path.
+Inference consists of traversing one path from the root to a \emph{leaf}; no optimisation happens at inference time.
+The thresholds are learned during training, not specified by an expert in the standard algorithm.
+
+\begin{figure}[htbp]\centering
+\begin{tikzpicture}[node distance=9mm and 12mm,scale=.93,transform shape]
+\node[flow] (root) {$V>6$?};
+\node[yesbox,below left=of root] (high1) {High risk};
+\node[flow,below right=of root] (temp) {$T>70$?};
+\node[yesbox,below left=of temp] (high2) {High risk};
+\node[yesbox,below right=of temp] (low) {Low risk};
+\draw[arr] (root) -- node[above left,font=\scriptsize]{yes} (high1);
+\draw[arr] (root) -- node[above right,font=\scriptsize]{no} (temp);
+\draw[arr] (temp) -- node[above left,font=\scriptsize]{yes} (high2);
+\draw[arr] (temp) -- node[above right,font=\scriptsize]{no} (low);
+\end{tikzpicture}
+\hfill
+\begin{tikzpicture}[x=.075cm,y=.37cm,baseline=(current bounding box.center)]
+\fill[palerteal] (0,0) rectangle (100,10);
+\fill[red!17] (0,6) rectangle (100,10);
+\fill[red!17] (70,0) rectangle (100,6);
+\draw[->,thick] (0,0)--(107,0) node[right,font=\scriptsize] {$T$};
+\draw[->,thick] (0,0)--(0,11.5) node[above,font=\scriptsize] {$V$};
+\draw[dashed,amber,thick] (0,6)--(100,6);
+\draw[dashed,amber,thick] (70,0)--(70,6);
+\foreach \x in {0,70,100}{\draw (\x,0)--(\x,-.24) node[below,font=\tiny]{\x};}
+\draw (0,6)--(-2,6) node[left,font=\tiny]{6};
+\node[font=\scriptsize,align=center,text=navy] at (29,3) {Low\\risk};
+\node[font=\scriptsize,align=center,text=navy] at (85,3) {High\\risk};
+\node[font=\scriptsize,text=navy] at (45,8) {High risk};
+\end{tikzpicture}
+\caption{The same decision tree as a rule hierarchy (top) and a feature-space partition (bottom).
+Every rectangular leaf region corresponds to one terminal prediction.}
+\label{fig:tree_regions}
+\end{figure}
+
+A conventional \term{axis-aligned} tree splits on one feature at a time, $x_j\leq\theta_{\text{threshold}}$ versus $x_j>\theta_{\text{threshold}}$.
+Its leaves divide feature space into $N_{\text{leaves}}$ disjoint regions.
+A standard constant-leaf regression tree is
+\begin{equation}
+\boxed{
+\hat f(x)
+=
+\sum_{j=1}^{N_{\text{leaves}}}
+\underbrace{\theta_{\text{leaf},j}}_{\text{constant prediction in leaf }j}
+\mathbb 1[x\in R_j]
+}.
+\end{equation}
+Under squared-error loss, each $\theta_{\text{leaf},j}$ is usually the mean training target of the observations routed to that leaf.
+A classification leaf can return the most frequent class or a vector of empirical class proportions.
+Small-leaf proportions are not necessarily calibrated probabilities.
+A tree therefore models a \emph{piecewise-constant function}, with conditional feature interactions created by its hierarchy: in \cref{fig:tree_regions}, temperature matters only for the branch with $V\leq6$.
+
+\subsection{Learning a split}
+\label{subsec:trees-learning-a-split}
+At a node, a greedy learner generates allowable feature--threshold candidates, measures the reduction in a node criterion, selects the candidate with greatest gain, then recursively repeats on its children until a stopping rule applies.
+The training process is a sequence of discrete structural decisions, rather than ordinary gradient descent through split thresholds.
+
+\begin{figure}[htbp]\centering
+\resizebox{\linewidth}{!}{%
+\begin{tikzpicture}[node distance=6mm and 6mm]
+\node[flow] (data) {Data reaching\\current node};
+\node[flow,right=of data] (search) {Propose feature\\and threshold};
+\node[flow,right=of search] (score) {Measure weighted\\impurity reduction};
+\node[flow,right=of score] (pick) {Choose best\\allowed split};
+\node[yesbox,right=of pick] (recur) {Route observations\\and repeat};
+\draw[arr] (data)--(search);\draw[arr] (search)--(score);\draw[arr] (score)--(pick);\draw[arr] (pick)--(recur);
+\end{tikzpicture}}
+\caption{Recursive tree fitting: a local split is chosen before the resulting subproblems are solved.
+A stopping rule instead produces a leaf prediction.}
+\label{fig:tree_fit_flow}
+\end{figure}
+
+For $N_{\text{classes}}$ classes, a common impurity is \term{Gini impurity}, $G=1-\sum_{j=1}^{N_{\text{classes}}}p_{\text{class }j}^{2}$.
+Gini is zero in a pure node; in balanced binary classification it is $0.5$.
+Suppose eight examples have four positives and four negatives, so $G_{\rm parent}=0.5$.
+A candidate split creates a five-sample child with class counts $(4,1)$ and a three-sample pure child.
+The five-sample impurity is $1-(4/5)^2-(1/5)^2=0.32$, giving
+\begin{equation}
+\boxed{\Delta G=0.5-\left(\frac58\,0.32+\frac38\,0\right)=0.30.}
+\end{equation}
+A split is useful because it creates more concentrated class distributions.
+\emph{Entropy} $-\sum_j p_{\text{class }j}\log p_{\text{class }j}$ is another classification criterion.
+Regression trees usually select splits that reduce within-node squared error/variance, or another specified regression objective; MAE-based methods naturally use median leaf predictions.
+These are alternative definitions of \emph{good partition}, not unrelated model families.
+See the loss-function discussion in \cref{sec:objectives-supervised-losses-for-continuous-targets,sec:objectives-classification-losses-and-logits}.
+
+\begin{calloutintuition}
+A tree learns a conditional partition of feature space.
+Standard leaves output constants; complex global predictions arise by routing inputs to different local regions.
+\end{calloutintuition}
+
+\section{Tree structure, greedy search and regularisation}
+\label{sec:trees-tree-structure-greedy-search-and-regularisation}
+\subsection{Greedy splits need not find the best tree}
+\label{subsec:trees-greedy-splits-need-not-find-the-best-tree}
+Local optimisation can miss feature interactions.
+For balanced XOR data, $y=x_1\oplus x_2$, each binary input feature alone leaves a 50--50 class mixture in both children.
+The first split achieves zero Gini gain, even though a depth-two tree can represent XOR exactly after splitting on both features.
+A greedy implementation that insists on positive immediate gain may never find it.
+This separates \emph{representational capacity} from \emph{optimisation ability}.
+
+\begin{figure}[htbp]\centering
+\begin{tikzpicture}[x=1.05cm,y=1.05cm]
+\fill[red!15] (0,0) rectangle (1,1);\fill[palerteal] (1,0) rectangle (2,1);
+\fill[palerteal] (0,1) rectangle (1,2);\fill[red!15] (1,1) rectangle (2,2);
+\draw[thick] (0,0) rectangle (2,2);\draw[white,thick] (1,0)--(1,2) (0,1)--(2,1);
+\node at (.5,.5){$0$};\node at (1.5,.5){$1$};\node at (.5,1.5){$1$};\node at (1.5,1.5){$0$};
+\node[below] at (.5,0){$x_1=0$};\node[below] at (1.5,0){$x_1=1$};
+\node[left] at (0,.5){$x_2=0$};\node[left] at (0,1.5){$x_2=1$};
+\end{tikzpicture}
+\caption{Balanced XOR: neither first-level split helps on its own, but two levels perfectly separate the classes.}
+\label{fig:tree_xor}
+\end{figure}
+
+\subsection{Depth, leaves and pruning}
+\label{subsec:trees-depth-leaves-and-pruning}
+A binary tree with maximum depth $N_{\text{depth}}$ has at most $2^{N_{\text{depth}}}$ leaves; depth 1 is a \emph{decision stump}.
+More leaves can approximate increasingly local structure, but individual leaf estimates may rely on few observations.
+This is the bias--variance trade-off already introduced in \cref{sec:evaluation-overfitting-underfitting-and-the-bias-variance-tradeoff}.
+
+\begin{center}\small
+\begin{tabularx}{\linewidth}{@{}L{.24\linewidth}YY@{}}\toprule
+Control & What it constrains & Trade-off\\\midrule
+Maximum depth & Number of sequential decisions & Less depth limits interactions; greater depth can fit noise\\
+Minimum samples per leaf & Evidence supporting each local estimate & Larger leaves stabilise predictions but smooth local structure\\
+Minimum samples to split & Eligibility to expand a node & Earlier stopping versus finer partitions\\
+Maximum leaf count & Number of distinct terminal regions & Direct budget for partition complexity\\
+Minimum split improvement & Gain required to add a split & Reject weak gains, possibly including useful precursors\\
+Pruning strength & Number of retained branches after growing & Simpler tree versus potentially discarded genuine structure\\\bottomrule
+\end{tabularx}
+\end{center}
+
+\term{Pre-pruning} prevents a split when a limit is reached; \term{post-pruning} removes branches from a larger fitted tree.
+Cost-complexity pruning makes the trade-off explicit:
+\begin{equation}
+\underbrace{J(T)}_{\text{selection objective}}
+=
+\underbrace{L_{\mathrm{train}}(T)}_{\text{fit}}
++
+\underbrace{\alpha N_{\text{leaves}}(T)}_{\text{complexity cost}}.
+\end{equation}
+Each extra leaf must therefore buy enough training improvement to justify its penalty.
+Pruning is not a complete solution to greedy-search errors: it simplifies already-discovered structures, rather than exploring every possible tree.
+
+\subsection{Growth strategy and split geometry}
+\label{subsec:trees-growth-strategy-and-split-geometry}
+\term{Level-wise} growth expands eligible nodes layer by layer.
+\term{Best-first/leaf-wise} growth expands the current leaf promising the greatest loss reduction.
+Leaf-wise growth concentrates complexity in difficult regions but can create deep low-support paths; level-wise growth allocates depth more evenly.
+Level-wise does \emph{not} imply symmetric splitting: nodes at the same depth can still use different tests.
+
+An axis-aligned split tests one feature, such as $x_j>\theta_{\text{threshold}}$; an \term{oblique split} tests $\theta_{\text{split}}^\top x>\theta_{\text{threshold}}$.
+A diagonal boundary, such as $T+2V>80$, may require many staircase-like axis-aligned regions but only one oblique split.
+Oblique splits increase geometric expressivity and typically make split search harder.
+
+\begin{calloutbias}
+If the target is well described by hierarchical single-feature thresholds and locally constant regions, standard trees represent the structure efficiently.
+If the boundary is smooth or strongly rotated, they may need many leaves; deeper trees add expressivity while increasing estimation variance.
+\end{calloutbias}
+Depth and leaf support are related but distinct controls.
+\begin{calloutmemoryhook}
+Depth limits interaction length; minimum leaf size limits evidence per local prediction.
+\end{calloutmemoryhook}
+
+\section{Bagging, Random Forests and ExtraTrees}
+\label{sec:trees-bagging-random-forests-and-extratrees}
+A single tree can be unstable: removing or changing a few observations may change a high-level split and many downstream predictions.
+\term{Bagging} (bootstrap aggregating) reduces this variation by fitting multiple trees to bootstrap samples and aggregating their outputs.
+
+\begin{figure}[htbp]\centering
+\resizebox{.9\linewidth}{!}{%
+\begin{tikzpicture}[node distance=7mm and 13mm]
+\node[flow] (d) {Original data $D$};
+\node[flow,below left=12mm and 35mm of d] (s1) {Bootstrap $D_1$};
+\node[flow,below=12mm of d] (s2) {Bootstrap $D_2$};
+\node[flow,below right=12mm and 35mm of d] (s3) {Bootstrap $D_3$};
+\node[yesbox,below=of s1] (t1) {Tree 1};
+\node[yesbox,below=of s2] (t2) {Tree 2};
+\node[yesbox,below=of s3] (t3) {Tree 3};
+\node[flow,below=21mm of t2] (agg) {Aggregate predictions};
+\foreach \s in {s1,s2,s3}{\draw[arr] (d)--(\s);}
+\foreach \i in {1,2,3}{\draw[arr] (s\i)--(t\i);\draw[arr] (t\i)--(agg);}
+\end{tikzpicture}}
+\caption{Bagging: independent bootstrap-fitted trees are combined at prediction time.
+Individual fits can be trained in parallel.}
+\label{fig:tree_bagging}
+\end{figure}
+
+Each bootstrap sample draws $N_{\text{examples}}$ observations \emph{with replacement} from $N_{\text{examples}}$ originals.
+For large $N_{\text{examples}}$, about $63.2\%$ of originals appear at least once and about $36.8\%$ are out-of-bag for that tree.
+Averaging regression predictions or class probabilities reduces variation when the trees' errors are not perfectly correlated.
+Majority voting is another classification aggregation rule.
+
+For $N_{\text{trees}}$ trees with common prediction variance $\sigma^2$ and pairwise correlation $\rho$, the equal-correlation model gives
+\begin{equation}
+\boxed{
+\Var(\bar f)
+=
+\underbrace{
+\underbrace{\sigma^2}_{\text{single-tree variance}}
+\underbrace{\rho}_{\text{pairwise error correlation}}
+}_{\text{shared variance: averaging cannot remove}}
++
+\underbrace{
+\sigma^2\frac{1-\rho}{N_{\text{trees}}}
+}_{\text{unshared variance: shrinks with more trees}}
+}.
+\end{equation}
+More trees only reduce the unshared component; decorrelation is therefore as important as tree count.
+This is a simplified equal-variance/equal-correlation model, not a universal forest error law; connect it to the broader bias--variance picture in \cref{sec:evaluation-overfitting-underfitting-and-the-bias-variance-tradeoff}.
+
+\term{Random Forests} add random selection of eligible features \emph{at each split}, commonly together with bootstrapping.
+This decorrelates trees that might otherwise make the same dominant early choices.
+Too much randomisation weakens individual trees, so diversity and individual predictive quality trade off.
+\term{ExtraTrees} also randomise candidate thresholds and often use the original sample rather than bootstrapping by default.
+The extra randomness can improve diversity and split-search efficiency while increasing individual-tree bias.
+
+\begin{center}\small
+\begin{tabularx}{\linewidth}{@{}L{.20\linewidth}YY@{}}\toprule
+Method & Randomness & Primary idea\\\midrule
+Bagged trees & Resample training rows & Average unstable learners\\
+Random Forest & Resample rows; random features per node & Reduce correlation between learners\\
+ExtraTrees & Random candidate thresholds; often random features & Additional split diversity, often less split-search work\\\bottomrule
+\end{tabularx}
+\end{center}
+
+\term{Out-of-bag (OOB) evaluation} predicts each training observation using only trees whose bootstrap samples omitted it.
+It offers an internal performance estimate under suitable sampling assumptions, but does not fix temporal or grouped leakage (\cref{sec:evaluation-cross-validation-and-fold-choice,sec:evaluation-model-selection-and-data-leakage}).
+
+\begin{calloutmemoryhook}
+Random Forests win by averaging diversity; more trees cannot remove shared error.
+\end{calloutmemoryhook}
+
+\section{Boosting: learning successive corrections}
+\label{sec:trees-boosting-learning-successive-corrections}
+Where bagging trains diverse trees independently, \term{boosting} trains a sequence of weak or limited-complexity learners that collectively improve a predictor.
+\term{AdaBoost} reweights training examples according to previous classification errors; hard examples gain relative emphasis.
+This can be useful, but mislabeled examples are also hard and may attract excessive attention.
+
+\subsection{Gradient boosting as functional optimisation}
+\label{subsec:trees-gradient-boosting-as-functional-optimisation}
+\term{Gradient boosting} updates the current predictor by adding a new correction tree:
+\begin{equation}
+\boxed{
+\underbrace{F_t(x)}_{\text{updated ensemble}}
+=
+\underbrace{F_{t-1}(x)}_{\text{current ensemble}}
++
+\underbrace{\eta}_{\text{shrinkage}}
+\underbrace{h_t(x)}_{\text{new correction tree}}
+}.
+\end{equation}
+Each stage improves the current ensemble rather than refitting the original target from scratch.
+
+For squared-error regression, suppose the current model predicts $5$ for targets $(3,5,7)$.
+The residuals are $(-2,0,2)$.
+If a correction tree fits these residuals exactly and $\eta=0.5$, the updated predictions become $(4,5,6)$.
+The ensemble improves through a series of moderate adjustments.
+
+More generally, each training example supplies the prediction-space direction
+\begin{equation}
+\boxed{
+\underbrace{r_{i,t}}_{\text{pseudo-residual}}
+=
+-\left.\underbrace{\frac{\partial L(y_i,F)}{\partial F}}_{\text{loss slope in prediction space}}\right|_{F=F_{t-1}(x_i)}
+}.
+\end{equation}
+A tree approximates this direction as a function of inputs; its terminal output values may subsequently be optimised for the specified loss.
+Squared-error pseudo-residuals are ordinary residuals (up to loss convention).
+For binary logistic loss differentiated with respect to logits, the negative gradient is label minus predicted probability.
+This connects tree boosting to loss design in \cref{sec:objectives-supervised-losses-for-continuous-targets,sec:objectives-classification-losses-and-logits}.
+
+\begin{figure}[htbp]\centering
+\resizebox{\linewidth}{!}{%
+\begin{tikzpicture}[node distance=6mm and 7mm]
+\node[flow] (f) {Current model $F_{t-1}$};
+\node[flow,right=of f] (p) {Predict training\\observations};
+\node[flow,right=of p] (g) {Compute negative\\loss gradients};
+\node[flow,right=of g] (t) {Fit correction\\tree $h_t$};
+\node[yesbox,right=of t] (u) {Update\\$F_t=F_{t-1}+\eta h_t$};
+\draw[arr] (f)--(p);\draw[arr] (p)--(g);\draw[arr] (g)--(t);\draw[arr] (t)--(u);
+\draw[arr,rounded corners] (u.south)--++(0,-.7)--([yshift=-.7cm]f.south)--(f.south);
+\end{tikzpicture}}
+\caption{Gradient boosting is stage-wise optimisation in prediction-function space: fit a correction, add it, recompute the next direction.}
+\label{fig:tree_boost_flow}
+\end{figure}
+
+This is related to gradient descent but not identical to backpropagating through a fixed neural network.
+Neural-network training typically updates continuously parameterised weights within an existing architecture.
+Boosting adds a \emph{new fitted function} at each iteration; hard tree split decisions are not usually differentiated end to end.
+The SGD and adaptive-optimiser discussion in \cref{sec:optimisation-batch-gradient-descent-vs-sgd-vs-mini-batch-sgd,sec:optimisation-adam-momentum-plus-adaptive-step-sizes} concerns a different parameterisation of the optimisation problem.
+
+
+\subsection{Ranking-aware boosting: LambdaMART}
+\label{subsec:trees-lambdamart}
+A ranking metric such as NDCG changes only when item order changes, so it is awkward as a direct smooth training loss (\cref{sec:objectives-ranking-and-preference-objectives,sec:evaluation-retrieval-and-ranking-metrics}).
+LambdaRank-style training instead creates pairwise correction signals and weights them by the ranking consequence of swapping the pair.
+If reversing two items would greatly change NDCG, that ordering error receives a stronger update than a swap deep in the list with almost no metric effect.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[node distance=8mm and 10mm]
+\node[flow] (pair) {Misordered\\item pair};
+\node[flow,right=of pair] (delta) {Estimate\\$|\Delta\mathrm{NDCG}|$};
+\node[decisionnode,right=of delta] (big) {large\\effect?};
+\node[yesbox,above right=4mm and 10mm of big] (strong) {Strong pairwise\\correction};
+\node[yesbox,below right=4mm and 10mm of big] (weak) {Weak pairwise\\correction};
+\node[flow,right=18mm of big] (tree) {Fit next\\boosting tree};
+\draw[arr] (pair)--(delta);
+\draw[arr] (delta)--(big);
+\draw[arr] (big)--node[above,font=\scriptsize]{yes}(strong);
+\draw[arr] (big)--node[below,font=\scriptsize]{no}(weak);
+\draw[arr] (strong)--(tree);
+\draw[arr] (weak)--(tree);
+\end{tikzpicture}
+\caption{LambdaMART keeps the stage-wise tree-boosting mechanism but makes the correction signal sensitive to where a ranking mistake occurs.}
+\end{figure}
+
+LambdaMART combines these ranking-aware ``lambda'' updates with MART-style gradient-boosted regression trees.
+The important conceptual change is not a new tree primitive: it is a new objective signal layered onto the boosting machinery already developed above.
+
+\begin{calloutmemoryhook}
+LambdaMART is boosting where high-impact ranking mistakes get stronger correction signals.
+\end{calloutmemoryhook}
+
+\subsection{Curvature and second-order updates}
+\label{subsec:trees-curvature-and-second-order-updates}
+Second-order tree boosting also uses curvature of the loss with respect to the current prediction.
+For one constant-output leaf, a common local quadratic update is
+\begin{equation}
+\boxed{
+\underbrace{\theta_{\text{leaf update}}}_{\text{constant correction in this leaf}}
+=
+-\frac{
+\underbrace{\sum_{i\in\mathrm{leaf}}\frac{\partial L_i}{\partial F_i}}_{\text{accumulated loss slope}}
+}{
+\underbrace{\sum_{i\in\mathrm{leaf}}\frac{\partial^2L_i}{\partial F_i^2}}_{\text{prediction-space curvature}}
++
+\underbrace{\lambda_{\text{leaf}}}_{\text{shrink large leaf updates}}
+}
+}.
+\end{equation}
+This is scalar curvature in prediction space, not the full parameter Hessian; compare \cref{subsec:la-hessian,sec:optimisation-newton-s-method-and-other-second-order-methods}.
+
+\subsection{Learning rate, depth and early stopping}
+\label{subsec:trees-learning-rate-depth-and-early-stopping}
+Smaller $\eta$ gives more conservative corrections, normally requiring more boosting stages.
+Large $\eta$ can fit quickly but may overstep or fit noise.
+The \emph{learning rate and number of trees must be tuned together}; doubling tree count does not exactly undo halving $\eta$, because the intermediate ensemble and all subsequent correction targets change.
+
+A depth-one stump contributes a function of one feature; an additive ensemble of such stumps cannot represent genuine cross-feature interactions on its raw score scale without richer components.
+Depth-two and deeper trees can encode conditional interactions within each stage.
+Validation-based early stopping selects the iteration before continuing improvement on the training loss ceases to help generalisation (\cref{sec:stability-early-stopping-stop-before-the-model-overfits,sec:evaluation-model-selection-and-data-leakage}).
+
+\begin{center}\small
+\begin{tabularx}{\linewidth}{@{}L{.25\linewidth}YY@{}}\toprule
+Design & Bagging / Random Forest & Gradient boosting\\\midrule
+Tree dependence & Trees independently fitted & Each stage depends on preceding model\\
+Combination & Average or vote & Add weighted corrections\\
+Main benefit & Stabilise high-variance predictors & Build fit through stage-wise loss reduction\\
+Typical trees & Often deep & Often shallow or leaf-limited\\
+Parallelism & Trees can be trained concurrently & Boosting stages are sequential\\
+Important controls & Tree count, randomness, leaf size & Learning rate, stages, leaf size, regularisation\\\bottomrule
+\end{tabularx}
+\end{center}
+
+\begin{calloutpractical}
+For gradient boosting, monitor validation loss across rounds and use early stopping.
+A falling training loss does not prove the next tree improves deployment performance.
+\end{calloutpractical}
+
+\section{XGBoost, LightGBM and CatBoost: what changed?}
+\label{sec:trees-xgboost-lightgbm-and-catboost-what-changed}
+The historical progression is best seen as multiple related developments rather than one mandatory chain.
+The useful story is the accumulation of problems and fixes, not a claim that each method replaced the previous one.
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}L{.16\linewidth}L{.22\linewidth}YY@{}}
+\toprule
+\textbf{Step} & \textbf{What changed} & \textbf{Why it was added} & \textbf{Consequence / new trade-off} \\
+\midrule
+CART & Recursive threshold partitioning & Represent nonlinear conditional rules & Flexible but unstable single trees \\
+Bagging / Random Forest & Average diversified trees & Reduce variance from unstable fits & More compute; averaging cannot remove shared error \\
+AdaBoost / Gradient Boosting & Add learners sequentially & Correct current mistakes or descend a loss & Strong staged fit; stages become dependent \\
+XGBoost & Second-order updates, explicit penalties, scalable split search & Regularise and accelerate boosting & More design knobs and systems complexity \\
+LightGBM / CatBoost & Selective computation, categorical handling, constrained growth choices & Improve efficiency or data handling & Extra approximation and inductive-bias choices \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The modern libraries below share a core boosting framework but emphasise different implementation choices.
+
+\subsection{XGBoost: explicit regularisation and efficient optimisation}
+\label{subsec:trees-xgboost-explicit-regularisation-and-efficient-optimisation}
+XGBoost popularised a scalable second-order tree-boosting system with explicit structural penalties.
+A representative objective separates predictive fit from structural/leaf penalties:
+\begin{equation}
+\underbrace{\sum_i L(y_i,F(x_i))}_{\text{predictive loss}}
++
+\sum_{t=1}^{N_{\text{trees}}}
+\left(
+\underbrace{\gamma N_{\text{leaves},t}}_{\text{cost of adding leaves}}
++
+\underbrace{
+\frac{\lambda}{2}
+\sum_{j=1}^{N_{\text{leaves},t}}\theta_{\text{leaf},t,j}^{2}
+}_{\text{shrink large leaf outputs}}
+\right).
+\end{equation}
+The two penalties regulate structural complexity and correction magnitude separately.
+This is regularisation of tree structure/leaf outputs rather than a generic neural-network weight penalty; compare \cref{sec:stability-regularisation-l1-and-l2}.
+Other design choices include row/column subsampling, missing-value-aware routing, approximate or histogram split search, and efficient memory/parallel processing.
+Leaf-count penalties and leaf-weight shrinkage regulate different forms of complexity.
+
+\subsection{Histogram split search}
+\label{subsec:trees-histogram-split-search}
+Searching every distinct numerical threshold can be expensive.
+A histogram learner maps numerical values to a finite set of bins, accumulates gradient/curvature statistics within each bin, and searches boundaries between bins.
+For example, $(1.1,1.2,1.5,2.8,3.0,3.1,4.9,5.0)$ may be quantised into three bins containing $(1.1,1.2,1.5)$, $(2.8,3.0,3.1)$ and $(4.9,5.0)$.
+
+This reduces split-search and memory cost at the expense of threshold resolution.
+The approximation need not worsen validation performance, but its quality and runtime depend on bin count and the distribution of feature values.
+Histogram methods now appear in several GBDT libraries; they are not unique to LightGBM.
+
+\subsection{LightGBM: selective use of computation}
+\label{subsec:trees-lightgbm-selective-use-of-computation}
+LightGBM is associated with several efficiency choices:
+\begin{itemize}
+\item \term{Leaf-wise growth}: preferentially expand the leaf with greatest gain; efficient use of a leaf budget, but potentially deep low-support branches.
+\item \term{GOSS (Gradient-based One-Side Sampling)}: keep high-gradient observations, sample some low-gradient observations, then reweight as appropriate for split-gain estimation.
+This saves work while retaining influential gradient information; it is an available sampling strategy, not necessarily enabled in every configuration.
+\item \term{EFB (Exclusive Feature Bundling)}: bundle sparse features that are mutually or nearly mutually exclusive, reducing effective dimensionality.
+Exclusivity means seldom nonzero together, not merely low correlation.
+\item \term{Histogram-based processing}: quantise features and aggregate split statistics, reducing work relative to exhaustive threshold scans.
+\end{itemize}
+The common principle is to allocate compute to observations, features and regions where it is likely to matter.
+These approximations can alter accuracy and regularisation, and must be tested under equal resource budgets.
+
+\subsection{CatBoost: ordered categories and symmetric trees}
+\label{subsec:trees-catboost-ordered-categories-and-symmetric-trees}
+Categorical features create a representation problem.
+One-hot encoding can greatly expand high-cardinality features.
+Global target encoding compresses them by replacing each category with a target statistic, but can leak an observation's own label into its input.
+For a category represented by one example, naive full-training target encoding can directly expose the answer.
+
+CatBoost uses \term{ordered categorical statistics}: conceptually, an example's category statistic depends on earlier observations in a chosen ordering, not on its own target, together with smoothing and other implementation details.
+\term{Ordered boosting} is a distinct, related training procedure designed to reduce prediction shift arising from reused target information in gradient estimation.
+Neither idea removes the need for appropriate temporal and group validation; a random permutation is not a replacement for chronology.
+
+CatBoost also characteristically uses \term{symmetric (oblivious) trees}, where all nodes at the same depth use the same test.
+This constrains the hypothesis class and supports efficient routing.
+Unlike merely \emph{level-wise} trees, symmetric trees cannot choose separate splits at different nodes of one level.
+CatBoost also offers other growth policies.
+
+\begin{center}\footnotesize
+\begin{tabularx}{\linewidth}{@{}L{.17\linewidth}YYY@{}}\toprule
+ & XGBoost & LightGBM & CatBoost\\\midrule
+Emphasis & Scalable regularised boosting & Efficiency and selective allocation & Categories, prediction shift, symmetric trees\\
+Split search & Exact/approximate/histogram options & Histogram-based & Quantised feature processing\\
+Growth & Depth-wise or loss-guided variants & Leaf-wise characteristically & Symmetric by default, alternatives\\
+Categories & Native handling or external encoding & Native handling or encoding & Ordered statistics and other transforms\\
+Characteristic ideas & Second-order updates, sparse-aware handling, explicit penalties & GOSS, EFB, histogram subtraction & Ordered boosting, ordered category statistics\\\bottomrule
+\end{tabularx}
+\end{center}
+
+\begin{calloutpractical}
+Library names are not independent hypotheses: compare specific growth, categorical-handling, sampling and regularisation mechanisms under a fair validation and compute budget.
+\end{calloutpractical}
+
+\section{Research optionality: what can be changed?}
+\label{sec:trees-research-optionality-what-can-be-changed}
+A tree system has several distinct design layers: input representation, base-tree structure, ensemble mechanism, optimisation objective, sampling procedure and computational implementation.
+Different modifications target different limitations.
+
+\small
+\begin{longtable}{@{}L{.21\linewidth}L{.35\linewidth}L{.35\linewidth}@{}}
+\caption{Degrees of experimentation for tree-based methods.}\label{tab:tree_research_axes}\\
+\toprule Design axis & Representative alternatives & Mechanism to measure\\\midrule\endfirsthead
+\toprule Design axis & Representative alternatives & Mechanism to measure\\\midrule\endhead
+Split geometry & Axis-aligned versus oblique & Fit to rotated boundaries; split count; compute\\
+Split search & Greedy versus lookahead & Discover interactions with initially weak splits\\
+Leaf outputs & Constant versus linear local models & Approximation of smooth local behaviour\\
+Growth policy & Level-wise versus best-first & Leaf depths, support and loss reduction\\
+Ensemble & Single tree, bagging, boosting & Stability versus progressive loss reduction\\
+Loss & Squared, robust, logistic, quantile & Alignment to task and error costs\\
+Sampling & Bootstrap, feature subsets, gradient-aware & Prediction correlation, training cost and variance\\
+Regularisation & Pruning, leaf penalties, shrinkage & Complexity, noisy-fit sensitivity\\
+Categories & One-hot, ordered statistics, native splits & High-cardinality generalisation and leakage\\
+Split resolution & Exact values versus histogram bins & Speed--accuracy--memory trade-off\\
+Uncertainty & Point, quantile, distributional predictions & Calibration and coverage under assumptions\\
+\bottomrule\end{longtable}
+\normalsize
+
+A research improvement can come from a richer \emph{hypothesis class} (oblique splits or linear leaves), better \emph{optimisation} (lookahead or second-order updates), better \emph{regularisation} (leaf penalties or shrinkage), better \emph{representation} (categorical statistics), or better \emph{systems engineering} (histograms and memory layout).
+These are different causal explanations of performance gains.
+
+Three useful controlled experiments are: compare bagging with Random Forests while logging tree correlation and ensemble error; compare level-wise with leaf-wise growth under a matched leaf budget while measuring leaf support and depth; and compare first- with second-order boosting using matched objectives while reporting wall-clock cost \emph{as well as} improvement per round.
+
+\begin{calloutdegreeofexperiment}
+Vary split geometry/search, growth policy, leaf model, ensemble type, objective, row/feature sampling, regularisation, category handling, histogram resolution, uncertainty output, and compute budget.
+\end{calloutdegreeofexperiment}
+
+\section{Inductive bias and model selection}
+\label{sec:trees-inductive-bias-and-model-selection}
+A tree's built-in preferences are: useful single-feature thresholds, hierarchical interactions, locally constant predictions, and adaptive refinement of regions.
+These assumptions can help with heterogeneous tabular features and abrupt conditional effects.
+They can be inefficient for oblique boundaries, smooth globally varying functions and behaviour far outside the training support (\cref{sec:nfl-inductive-bias-the-assumptions-that-make-learning-possible}).
+
+\subsection{Extrapolation and feature transformations}
+\label{subsec:trees-extrapolation-and-feature-transformations}
+Suppose the physical target is $y=2x$ and training data only cover $0\leq x\leq10$.
+A linear model may extrapolate the same slope to $x=15$.
+A standard regression tree routes every sufficiently large $x$ to its terminal rightmost leaf and returns its constant estimate.
+A finite sum or average of such trees likewise stays constant beyond all its final thresholds along that coordinate, holding other features fixed.
+More trees improve within-support resolution but do not automatically recover the outside-support physical law.
+
+\begin{figure}[htbp]\centering
+\begin{tikzpicture}
+\begin{axis}[width=.79\linewidth,height=5.0cm,xmin=0,xmax=16,ymin=0,ymax=34,axis lines=left,xlabel={$x$},ylabel={predicted $y$},xtick={0,5,10,15},ytick={0,10,20,30},grid=both,grid style={rulegray!50},legend style={at={(.03,.97)},anchor=north west,font=\small,draw=none,fill=white}]
+\addplot[draw=none,fill=palerteal] coordinates {(0,0)(10,0)(10,34)(0,34)} \closedcycle;
+\addplot[very thick,deepblue,domain=0:16] {2*x};\addlegendentry{linear relationship}
+\addplot[very thick,amber,const plot] coordinates {(0,2)(2,6)(4,10)(6,14)(8,18)(10,19)(16,19)};\addlegendentry{tree-like staircase}
+\addplot[dashed,slate,thick] coordinates {(10,0)(10,34)};
+\end{axis}
+\end{tikzpicture}
+\caption{Schematic extrapolation: a constant-leaf tree saturates once an input lies beyond the last training-supported split; a linear function can continue its slope.
+Curves are illustrative, not fitted experimental results.}
+\label{fig:tree_extrapolation}
+\end{figure}
+
+Because exact axis-aligned splits primarily depend on feature ordering, strictly monotonic transforms of a numerical feature preserve the representable partitions (after transforming thresholds), unlike a general rotation that mixes features.
+Practical fitted models may still change owing to histogram binning, ties and numerical detail.
+Standard scaling is often unnecessary for exact tree splits; it may still matter for models or preprocessing stages around the tree (\cref{sec:representation-scaling-standardisation-and-leakage}).
+
+\begin{calloutpractical}
+Known physical law plus unexplained residuals: investigate $\hat y(x)=f_{\mathrm{physics}}(x)+f_{\mathrm{trees}}(x)$.
+The physical term can encode extrapolative structure; the learned correction still needs out-of-domain validation.
+\end{calloutpractical}
+
+\begin{center}\small
+\begin{tabularx}{\linewidth}{@{}L{.22\linewidth}YY@{}}\toprule
+Model family & Preferred structure & Notable limitation to test\\\midrule
+Linear / additive model & Global linear or additive effects & Missing interactions and discontinuities\\
+Single tree & Hierarchical threshold rules & Instability; staircase approximation\\
+Random Forest & Average diverse local partitions & Correlated errors; extrapolation\\
+Boosted trees & Sequential additive partition corrections & Overfit to residual noise; extrapolation\\
+Neural network & Learned continuous representations & Data/optimisation and architectural bias\\
+Physics-informed/hybrid & Governing laws plus fitted deviations & Error from incorrect scientific assumptions\\\bottomrule
+\end{tabularx}
+\end{center}
+
+\section{Evaluation, explanation and failure modes}
+\label{sec:trees-evaluation-explanation-and-failure-modes}
+\subsection{Evaluate the deployment task, not a random row split}
+\label{subsec:trees-evaluate-the-deployment-task-not-a-random-row-split}
+In longitudinal data, measurements from one machine or person can be strongly dependent.
+Randomly dividing rows may put the same entity in training and test sets.
+For forecasting, training on later observations than those being tested can introduce future-information leakage.
+Choose chronological and/or grouped validation according to the actual deployment question (\cref{sec:evaluation-cross-validation-and-fold-choice,sec:adaptation-domain-adaptation-the-data-distribution-changes}).
+
+Supervised feature engineering is another leakage route.
+Computing global category target means, performing label-dependent feature selection before splitting, or using a row's own label during its target encoding can all inflate apparent validation results.
+Fit transformations within the training fold, with cross-fitting or ordered encodings when appropriate.
+Missingness may itself be predictive, but changing collection practices can create shift; an integer category code should not silently become an ordinal physical quantity.
+
+\subsection{Metrics, importance and causal interpretation}
+\label{subsec:trees-metrics-importance-and-causal-interpretation}
+Rare-event prediction should consider precision, recall and PR curves, not accuracy alone; log loss and calibration measure different properties from ranking AUC.
+Operating thresholds should reflect false-alarm and missed-event costs.
+See the worked definitions in \cref{sec:evaluation-precision-recall-and-f1,sec:evaluation-roc-curves-auc-roc-and-precision-recall,sec:evaluation-decision-thresholds}.
+
+Three common explanations answer different questions:
+\begin{itemize}
+\item \term{Impurity importance} accumulates training-criterion reductions attributed to features; continuous/high-cardinality features can receive a structural advantage.
+\item \term{Permutation importance} measures held-out performance deterioration when one feature is shuffled; correlated predictors can substitute for one another, masking individual importance.
+\item \term{SHAP} assigns additive contributions to a prediction relative to a chosen reference/distributional convention; an attribution is not an intervention or an automatic causal effect.
+\end{itemize}
+Partial dependence averages predictions while changing a chosen feature; individual conditional expectation traces this for one observation.
+With strongly dependent features, intervening on one coordinate while holding others unchanged can generate unrealistic feature combinations.
+Such plots describe a fitted model, not necessarily the true data-generating mechanism.
+
+\begin{center}\small
+\begin{tabularx}{\linewidth}{@{}L{.27\linewidth}YY@{}}\toprule
+Failure mode & Mechanism & Useful check\\\midrule
+Overfitting & Tiny leaves; late boosting stages fit noise & Leaf limits, early stopping, held-out trends\\
+Leakage & Targets or future/group information in features & Pipeline audit, grouped/time splits\\
+Poor calibration & Predicted scores do not match event frequencies & Reliability curves; probability scores such as log loss or Brier score\\
+Shift & Deployment population differs from training & Time/site holdouts; drift monitoring\\
+Misleading importance & Correlated predictors or split-cardinality effects & Refit stability; grouped perturbations\\
+Slow inference & Many trees, deep paths, expensive preprocessing & Profile end-to-end latency and memory\\
+Extrapolation error & Terminal leaves return learned local values & Validate beyond training support; hybrid model\\\bottomrule
+\end{tabularx}
+\end{center}
+
+\begin{calloutmemoryhook}
+Feature attribution describes model dependence, not causal mechanism.
+\end{calloutmemoryhook}
+
+\section{Extensions and a complete research example}
+\label{sec:trees-extensions-and-a-complete-research-example}
+\subsection{Beyond standard trees}
+\label{subsec:trees-beyond-standard-trees}
+Conventional trees are not the end of the design space:
+\begin{itemize}
+\item \term{Differentiable trees} soften routing, for example $p_{\mathrm{right}}(x)=\sigma((\theta_{\text{split}}^\top x-\theta_{\text{threshold}})/\tau_{\text{routing softness}})$, enabling gradients through route probabilities.
+Small $\tau_{\text{routing softness}}$ approaches hard routing but may cause saturated gradients; soft routing can also make inference costlier.
+\item \term{Model trees} predict $\theta_{\text{leaf},j}^\top x+\theta_{\text{bias},j}$ inside region $R_j$ rather than a constant.
+This fits smooth local effects more directly, but local parameter fitting and continuity across boundaries become design issues.
+\item \term{Quantile or distributional boosting} targets uncertainty rather than only a conditional mean.
+Conformal calibration can provide prediction sets when future cases behave like the calibration cases under the method's stated assumptions; coverage under shift still requires examination.
+\item \term{Constrained trees} may enforce monotonic effects or limit interactions, adding domain-specific bias.
+An incorrect constraint can create systematic error.
+\item \term{Neural--tree hybrids and tabular foundation models} change representation learning or transfer information across tasks rather than only improving the split search of a newly fitted tree.
+\end{itemize}
+
+\subsection{Worked design: failure forecasting on repeated measurements}
+\label{subsec:trees-worked-design-failure-forecasting-on-repeated-measurements}
+Suppose 500 machines produce repeated sensor measurements over several years.
+The inputs include numerical readings and categorical manufacturers; failures are rare; labels are noisy and inference must be fast.
+A defensible workflow is:
+\begin{enumerate}
+\item Define the unit of prediction (next-month failure per machine) and the information actually available at decision time.
+\item Use chronological validation, and hold out complete machines as well if the deployment goal includes unseen machines.
+Repeated rows do not equal independent machines.
+\item Fit a simple physical or parametric baseline, a regularised single tree, a Random Forest and a regularised GBDT; evaluate suitable categorical treatment without target leakage.
+\item Compare minimum leaf size, tree complexity, boosting shrinkage and early stopping; report stability across machines, time windows and random seeds.
+\item Evaluate PR behaviour, calibration and application-specific false-alarm costs, not accuracy in isolation.
+\item Profile end-to-end inference latency and memory.
+Investigate whether manufacturer effects and feature importances remain stable across valid holdouts.
+\end{enumerate}
+This experiment tests specific modelling assumptions as well as parameter values.
+The appropriate ensemble cannot be inferred from its library name alone.
+
+\begin{calloutmemoryhook}
+Trees partition; bagging averages diverse partitions; boosting adds loss-driven corrections.
+\end{calloutmemoryhook}
+
+\section{Further reading}
+\label{sec:trees-further-reading}
+\begin{itemize}
+\item Chen and Guestrin (2016), \href{https://arxiv.org/abs/1603.02754}{\emph{XGBoost: A Scalable Tree Boosting System}}: regularised boosting and scalable split search.
+\item Ke et al. (2017), \href{https://papers.nips.cc/paper_files/paper/2017/hash/6449f44a102fde848669bdd9eb6b76fa-Abstract.html}{\emph{LightGBM: A Highly Efficient Gradient Boosting Decision Tree}}: GOSS and EFB.
+\item Prokhorenkova et al. (2018), \href{https://arxiv.org/abs/1706.09516}{\emph{CatBoost: Unbiased Boosting with Categorical Features}}: ordered statistics and boosting.
+\item Grinsztajn et al. (2022), \href{https://arxiv.org/abs/2207.08815}{\emph{Why Do Tree-Based Models Still Outperform Deep Learning on Typical Tabular Data?}}: comparative inductive-bias study with a limited benchmark scope.
+\end{itemize}

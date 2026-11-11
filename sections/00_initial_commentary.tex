@@ -1,0 +1,302 @@
+% Additional callout environments used by the front matter and available to later sections.
+% These live here so the main document and lesson files remain untouched.
+\newtcolorbox{calloutspecialcase}[1][]{enhanced,breakable,colback=paleamber,colframe=amber,boxrule=.6pt,arc=2mm,left=3mm,right=3mm,top=2mm,bottom=2mm,title={\bfseries Special Case},fonttitle=\color{white},colbacktitle=amber,#1}
+\newtcolorbox{calloutmemoryhook}[1][]{enhanced,breakable,colback=palerblue,colframe=deepblue,boxrule=.6pt,arc=2mm,left=3mm,right=3mm,top=2mm,bottom=2mm,title={\bfseries Memory Hook},fonttitle=\color{white},colbacktitle=deepblue,#1}
+\newtcolorbox{calloutdegreeofexperiment}[1][]{enhanced,breakable,colback=white,colframe=navy,boxrule=.7pt,arc=2mm,left=3mm,right=3mm,top=2mm,bottom=2mm,title={\bfseries Degree of Experiment},fonttitle=\color{white},colbacktitle=navy,#1}
+
+\chapter*{Initial Commentary}
+\addcontentsline{toc}{chapter}{Initial Commentary}
+\markboth{Initial Commentary}{Initial Commentary}
+
+\subsection*{Goals}
+\addcontentsline{toc}{section}{Goals}
+This book is not aimed at a student, graduate, or academic learning machine learning from scratch.
+It is a revision tool intended to give a high-level understanding of the wide research area we call ML.
+Being targeted at senior or expert-level practitioners looking for a refresher, update, or review, this book aims to:
+
+\begin{itemize}
+    \item represent the topics mental model quickly
+    \item connect topics to the assumptions, consequences, and neighbouring ideas
+    \item expose the design choices and research degrees of freedom around a method
+\end{itemize}
+
+\subsection*{Philosophy}
+\addcontentsline{toc}{section}{Philosophy}
+This book follows Henry's learning policies:
+
+\begin{itemize}
+    \item \textbf{Allow the reader their own language.}
+    Learning is done by understanding, and we all understand in different ways.
+    Leaving naming to the reader gives the reader maximum space to use their own definitions.
+    It also means that we can rely on the maths talking for us, and we do not need long ``where $X$ is $Y$ and $A$ is $B$'' text surrounding maths.
+    For this reason, favour descriptive mathematics, or even ``plain English equations''.
+    Some examples:
+    \begin{itemize}
+        \item Instead of using the Jacobian, $J$, in an expression, use its base definition $\left(\frac{\partial y}{\partial x}\right)$ where that is clearer. If the fact that it is a Jacobian matters, an underbrace can name the term without introducing another symbol.
+        \item Instead of assigning counts to arbitrary letters, use descriptive subscripts such as $N_{\text{experts}}$ or $N_{\text{trees}}$.
+        \item The term $\lambda_{\text{e-val(A)}}$ is clearly representing the eigenvalue of matrix A without wasting text space.
+    \end{itemize}
+
+    \item \textbf{Short and sweet.}
+    Some textbooks spell out everything for the reader, making reading passive.
+    Jumping a few logical steps and naming a conclusion rather than reproducing a full derivation makes reading active: the reader fills in the small gaps in their own terms.
+
+    \item \textbf{Minimal mathematics, maximum intuition.}
+    The reader should not need to wade through definitions and mathematical fuckery to understand a topic.
+    After one read they should be able to discuss and reason around a topic.
+
+    \item \textbf{Minimal jargon.}
+    Some technical vocabulary is necessary, but terminology should earn its place.
+    Prefer descriptive plain-English wording when a specialist label does not add useful precision.
+    Henry believes that humans naturally obscure their discoveries to nurse their own ego, and impress others - avoid this. 
+    
+    \item \textbf{Memory Hook.}
+    A Memory Hook is a short sentence that encodes information and acts as a retrieval cue for a much larger mental model.
+    People struggle to memorise large amounts of text and maths, but often remember a compact story or rule quickly.
+    Therefore, explain the story as concisely as possible and summarise it with a Memory Hook.
+    Some synonyms I have heard them described as: micro-heuristics, concept capsules, retrieval rules, compressed principles, rules of thumb, Compressed Heuristics, Knowledge in One Breath, High-Leverage Facts, or simply Memory Hooks. 
+    They may be further split into categories:
+    \begin{itemize}
+        \item \textbf{Mechanisms}. e.g: \textit{Vanishing gradients make early layers slow learners}, e.g: \textit{More parameters reduce bias; regularisation restrains variance}.
+        \item \textbf{Actions}. e.g: \textit{With ReLU activations, start with He/Kaiming initialisation to handle the negatives}.
+        \item \textbf{Special Cases}. e.g: \textit{L1 Regularisation is basically feature selection}.
+        \item \textbf{Differentiator}. e.g: \textit{AdamW seperates weight decay and scaling; adding an L2 penalty inside Adam does not produce the same update}.
+    \end{itemize}
+    Once memorised, one should be able to rebuild a mental model of each sub-topic from a single sentence and reason outward from that sentence.
+    \item \textbf{Analogies.} Analogies are vital for bridging gaps, unifying across diffuse fields and intuition.
+\end{itemize}
+
+
+
+\subsection*{Assumed Understanding}
+\addcontentsline{toc}{section}{Assumed Understanding}
+
+Because this is aimed at revision rather than first-time teaching, we do not need to dive into easy material.
+We assume some knowledge of linear algebra (for example, what orthogonal means), basic maths (differentiation, the chain rule, probability), computer science (for example, what a bit is), physics-style reasoning (for example, entropy), and basic world knowledge (for example, what an image is).
+If a prerequisite is only needed to understand one consequence, remind the reader of the minimum required fact rather than reteaching the whole prerequisite topic.
+
+\subsection*{How to Read This}
+\addcontentsline{toc}{section}{How to Read This}
+
+This textbook is not a ``teach me ML'' book with full derivations and exhaustive depth.
+It is a high-level overview of key points, with a focus on links, consequences, design choices, and practical usage.
+A few examples:
+
+\begin{enumerate}
+    \item We teach how Adam interacts with L2 regularisation and why AdamW changes the update; we do not derive convergence boundaries.
+    \item We describe the evolution of tree architectures as an accumulation of methods and ideas toward modern systems; we do not provide an end-to-end derivation of every incremental algorithm.
+    \item We explain what a design choice changes, which assumptions make it sensible, and what failure mode it addresses; we do not catalogue every historical variant simply because it exists.
+\end{enumerate}
+
+A useful reading pattern is: \textbf{mechanism $\rightarrow$ consequence $\rightarrow$ trade-off $\rightarrow$ practical choice}.
+Equations, figures, timelines, and callouts exist to compress that chain, not to interrupt it.
+
+\subsection*{Types of Callout}
+\addcontentsline{toc}{section}{Types of Callout}
+Callouts are used strictly for these rules, but are often memory hooks. 
+
+\begin{calloutexample}
+A concrete worked or real-world instance of the idea just described.
+For example: \textit{if two classifiers have the same accuracy but one misses nearly all rare positive cases, class imbalance has made accuracy hide the behaviour we actually care about.}
+\end{calloutexample}
+
+\begin{calloutpractical}
+A directly useful action, implementation choice, or debugging rule.
+For example: \textit{With ReLU activations, start with He/Kaiming initialisation.}
+\end{calloutpractical}
+
+\begin{calloutmemorise}
+A fact or equation that is worth recalling accurately rather than reconstructing each time.
+For example:
+\[
+\operatorname{softmax}(z_i)=\frac{e^{z_i}}{\sum_j e^{z_j}}.
+\]
+\end{calloutmemorise}
+
+\begin{calloutintuition}
+A compact way to think about a mechanism without pretending the analogy is the full definition.
+
+\textit{L1 regularisation is basically feature selection on weight abs-size.}
+\end{calloutintuition}
+
+\begin{calloutbias}
+State the assumption a method builds in, what that assumption buys us, and when it can become a restriction.
+Use the form: \textit{if \textless assumption/data/method\textgreater, then \textless consequence\textgreater}.
+
+For example: \textit{if nearby pixels are more related than distant pixels, convolution's locality bias is useful; if feature order is arbitrary, that same bias may be inappropriate.}
+\end{calloutbias}
+
+\begin{calloutspecialcase}
+A useful reduction where a broader idea becomes a familiar one under a particular setting.
+For example: \textit{the F1 score is the special case of the F$\beta$ score with $\beta=1$}.
+\end{calloutspecialcase}
+
+\begin{calloutmemoryhook}
+One sentence that should let the reader reconstruct a larger mental model.
+It may encode a mechanism, action, special case, or differentiator.
+For example: \textit{Vanishing gradients make early layers slow learners.}
+\end{calloutmemoryhook}
+
+\begin{calloutdegreeofexperiment}
+A dimension along which researchers or experimenters can change a system while keeping the broader method recognisable.
+For example, for normalisation one can vary \textit{which axes define the statistics, where normalisation is inserted, whether the statistics depend on the batch, and whether learned scale/shift parameters are used}.
+\end{calloutdegreeofexperiment}
+
+\subsection*{Formatting and AI Guide}
+\addcontentsline{toc}{section}{Formatting Guide}
+
+\subsubsection*{AI Editing Rules}
+\addcontentsline{toc}{section}{AI Editing Rules}
+
+AI edits should behave like careful maintenance of one coherent textbook, not like a fresh author rewriting the surrounding material.
+
+\begin{enumerate}
+    \item \textbf{Respect the Initial Commentary.} Conduct work with Goals, philosophy and formatting in context. 
+
+    \item \textbf{Respect edit scope.} Change only the material requested. 
+    Do not silently rewrite other sections.
+
+    \item \textbf{Integrate; do not append.} New work belongs at the point in the existing text where the concept is most relevant. 
+    Do not create a trailing ``questions'', ``additional notes'', or ``follow-ups'' section unless explicitly requested.
+    Add to sections, tables, reference it, etc.
+
+    \item \textbf{Use the callout taxonomy literally.} Example = concrete instance; Practical Tip = action; Memorise = exact recall; Intuition = mental model; Inductive Bias = assumption $\rightarrow$ consequence; Special Case = useful reduction; Memory Hook = compressed retrieval cue; Degree of Experiment = research/design axis. Do not create callout categories.
+
+    \item \textbf{Cross-reference before duplicating.} If the prerequisite idea is already taught elsewhere, link to it and provide only the minimum reminder needed locally.
+
+    \item \textbf{Use visuals for structure.} All visuals need visual reviewing, never 'tkviz and forget'. 
+
+    \item \textbf{Preserve document mechanics.} Keep labels, references, equations, figures, terminology, and LaTeX conventions consistent with the existing book. 
+    After edits, compile and visually verify the affected pages rather than assuming valid source means valid layout.
+\end{enumerate}
+
+
+\subsubsection*{Tone}
+\addcontentsline{toc}{section}{Tone}
+
+This is informal for a textbook, but it should remain clear and technically precise.
+For example: ``\code{L1 regularisation is basically feature selection on abs(weights)}''.
+Here, \code{abs(weights)} is deliberate shorthand for the more long-winded ``absolute size of the weights''.
+Shorthand is welcome when it compresses an idea without changing its meaning.
+
+
+\subsubsection*{Prose and hierarchy}
+
+\begin{itemize}
+    \item New latex line per sentence (not a new compiled/pdf line!)
+    \item Prefer short paragraphs. 
+    A paragraph should normally carry one conceptual step: mechanism, consequence, contrast, or caveat.
+    \item Use \textbf{bold} for the local concept that the sentence is about, \textit{italics} for compact rules or deliberately memorable phrasing, and \code{monospace} for code-like shorthand such as \code{abs(weights)}.
+    \item Introduce jargon only when the term will be useful later. If the plain-English phrase is clearer, use it first and put the formal name next to it in bold.
+
+\end{itemize}
+
+\subsubsection*{Mathematics}
+
+\begin{itemize}
+    \item Use equations when the mathematical relationship itself is the memory hook, when notation is more compact than prose, or when a downstream consequence depends on the form of the equation.
+    \item Prefer descriptive notation and subscripts over arbitrary letters. Avoid introducing a symbol merely to save one line of typing.
+    \item Do not include a derivation by default. Show the minimal step needed to expose the mechanism or consequence.
+    \item When a particular equation is genuinely recall-worthy, put it in a \textbf{Memorise} callout. Most equations should remain ordinary body content.
+    \item Explain non-obvious terms next to the equation, but do not spell out standard notation the assumed reader already knows.
+    \item Generally, condense an idea down to one equation through labelling and substitution. 
+    For example, the Adam equation is often expressed as 
+    \[
+        \theta_{t+1}=\theta_t-\eta\frac{\hat m_t}{\sqrt{\hat v_t}+\epsilon}
+    \]
+    with some definitions, but we prefer a 'whole story' equation:
+    \[
+        \theta_{t+1}
+        =
+        \theta_t-\eta
+        \frac{
+        \overbrace{\beta_1m_{t-1}+(1-\beta_1)g_t}
+        ^{\substack{= m_t , \text{momentum}}}
+        }{
+        \sqrt{
+        \underbrace{\beta_2v_{t-1}+(1-\beta_2)g_t^{2}}
+        _{\substack{= v_t , \text{scale}}}
+        }+\epsilon
+        }
+    \]
+    \item Some non-standard notation, which we standardise here:
+    \begin{itemize}
+        \item Model Weights $w$ should be represented as parameter weights: $\theta_{\text{weights}}$.
+        \item Any count is $N$ with an english subscript.
+        \item Indexing a matrix if with subscripts like $A_{ij}$ and selecting a matrix subset is pythonic like $A_{[:i]}$ for the first i columns of $A$.
+    \end{itemize}
+    
+    
+\end{itemize}
+
+\subsubsection*{Research evolution}
+
+When methods evolved through a recognisable sequence show the evolution as an accumulation of problems/fixes rather than as isolated definitions.
+A compact table-timeline is preferred when it makes the sequence clear.
+The goal is not historical completeness. 
+Include the steps that change the reader's mental model of the modern method.
+
+\begin{center}
+\small
+\begin{tabularx}{0.96\textwidth}{@{}L{0.17\textwidth}L{0.22\textwidth}Y Y@{}}
+\toprule
+\textbf{Step} & \textbf{What changed} & \textbf{Why it was added} & \textbf{Consequence / new trade-off} \\
+\midrule
+Baseline & Starting mechanism & What it cannot do well & The limitation that motivates the next step \\
+Next method & One important addition & Which limitation it targets & What improves, plus what becomes more complex or biased \\
+Modern variant & Further separation or control & Which earlier coupling/failure it fixes & Current practical behaviour and remaining choices \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsubsection*{Callout discipline}
+
+A useful test is whether the boxed text can be removed without breaking the main explanation: the body should still teach the topic, while the callout should provide a separable retrieval cue, action, example, or qualification.
+Avoid stacking several callouts in a row in ordinary chapters.
+
+\subsubsection*{Formatting Example}
+
+The following miniature section demonstrates the intended rhythm: short mechanism, minimal maths, then a small number of purpose-specific callouts.
+
+\paragraph{L1 regularisation.}
+Add a penalty proportional to the absolute size of the parameters:
+\[
+\mathcal{L}_{\text{total}}
+=
+\mathcal{L}_{\text{data}}
++
+\lambda\sum_i |w_i|.
+\]
+The penalty has a constant-magnitude pull toward zero away from zero, so weakly useful parameters are more likely to be driven exactly to zero than under an L2 penalty. The practical consequence is sparse parameter vectors and, in models where weights map directly to input features, an effect similar to feature selection.
+
+\begin{calloutintuition}
+\textit{L1 is basically feature selection on weight abs-size.}
+\end{calloutintuition}
+
+\begin{calloutexample}
+In a linear model with thousands of candidate input features, increasing $\lambda$ can drive many feature weights to exactly zero, leaving a smaller active subset.
+\end{calloutexample}
+
+\begin{calloutdegreeofexperiment}
+The research/design knobs include the penalty strength $\lambda$, which parameter groups are penalised, whether sparsity is applied to individual weights or structured groups, and whether sparsity is imposed during training or by a later pruning step.
+\end{calloutdegreeofexperiment}
+
+This is the intended level of depth: enough mathematics to expose the mechanism, enough consequence to make the choice useful, and no derivation that does not change the mental model.
+
+
+
+
+
+
+\section{ToDo}
+- Fill Reinforcement Learning section.
+- Fill PDE / Scientific ML section.
+- Add Unsupervised Learning: K-means, GMM/EM, hierarchical clustering, DBSCAN/HDBSCAN.
+- Add Uncertainty: calibration, aleatoric vs epistemic, ensembles, conformal prediction.
+- Add Research Methodology: baselines, ablations, HPO, repeated seeds, significance, fair compute comparisons.
+- Add Causal Inference: confounding, interventions, DAGs, propensity methods, treatment effects.
+- Add Time-Series / Forecasting.
+- Expand Preprocessing: missing data, categorical encoding, outliers, class imbalance, label noise.
+- Finish LLM reasoning / post-training / multi-agent placeholders.
+- Separate Generative Modelling from the GNN chapter.
+- Fix unresolved ?? cross-references and the remaining PROGRESS FLAG.

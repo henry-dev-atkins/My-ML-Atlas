@@ -1,0 +1,25 @@
+\begin{titlepage}
+\thispagestyle{empty}
+\begingroup
+\definecolor{atlascream}{HTML}{F9E3AC}
+\begin{tikzpicture}[remember picture,overlay]
+  % Full bleed A4: fills the page exactly. The original image is 2:3,
+  % so there is a small horizontal stretch to A4 (210:297).
+  \node[anchor=center,inner sep=0] at (current page.center) {\includegraphics[width=\paperwidth,height=\paperheight]{figures/atlas_background.png}};
+
+  % Text overlays; distances are from the top of the A4 page.
+  \node[anchor=north,align=center,text=atlascream,inner sep=0pt]
+    at ([yshift=-30mm]current page.north)
+    {{\fontfamily{ppl}\selectfont\bfseries\fontsize{43}{49}\selectfont Henry's ML Atlas}};
+
+  \node[anchor=north,align=center,text=atlascream,inner sep=0pt]
+    at ([yshift=-50mm]current page.north)
+    {{\fontfamily{ppl}\selectfont\fontsize{14.2}{18}\selectfont Machine Learning Revision Notes}};
+
+  \node[anchor=north,align=center,text=atlascream,inner sep=0pt]
+    at ([yshift=-63mm]current page.north)
+    {{\fontfamily{ppl}\selectfont\fontsize{13}{16}\selectfont September 2026}};
+\end{tikzpicture}
+\null
+\endgroup
+\end{titlepage}

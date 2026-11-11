@@ -1,0 +1,693 @@
+% Generative Modelling
+% Intended insertion point: after Architectures: Graph Neural Networks and before Inference and Model Compression.
+% Uses standard packages already expected by this textbook: amsmath, amssymb, booktabs, tabularx, array, tikz, float.
+% TikZ libraries used: arrows.meta, positioning, calc, fit, backgrounds.
+% Assumes the textbook callout environments:
+% calloutmemoryhook, calloutintuition, calloutinductivebias, calloutdegreeofexperiment,
+% calloutmemorise, calloutexample, calloutpracticaltip, calloutspecialcase.
+
+\chapter{Generative Modelling}
+\label{chap:generative-modelling}
+
+A generative model learns a mechanism that turns an easy source of randomness into samples distributed like the observed data:
+\[
+\underbrace{z\sim p_{\text{simple}}}_{\text{easy to sample}}
+\quad\xrightarrow{\text{learned mechanism}}\quad
+\underbrace{x\sim p_{\text{data}}}_{\text{complex target distribution}}.
+\]
+The useful distinction between generative families is therefore not simply their network architecture, but \textbf{what object is learned between the simple and data distributions}.
+A U-Net or Transformer can parameterise several of these objects, so architecture, objective and sampler are separate design layers.
+Autoregressive models learn conditional next-element distributions and were already developed for language generation in Section~13.7; this section focuses on latent-variable, adversarial, diffusion/score and flow-based generation.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\linewidth}{>{\bfseries}l X X}
+\toprule
+Family & What is learned & Sampling path \\
+\midrule
+VAE & probabilistic latent encoder/decoder & sample latent $\rightarrow$ decode \\
+GAN & direct generator trained against a discriminator/critic & noise $\rightarrow$ generator \\
+Diffusion / score & denoising or score-related field across noise levels & noise $\rightarrow$ repeated reverse dynamics \\
+Flow matching & time-dependent velocity field & noise $\rightarrow$ integrate an ODE \\
+Autoregressive & conditional next-element distribution & repeatedly sample the next element \\
+\bottomrule
+\end{tabularx}
+\caption{Generative families differ mainly in the learned object and the path used at inference; the neural backbone is a separate choice.}
+\label{tab:generative-families}
+\end{table}
+
+\begin{calloutmemoryhook}
+Generative models differ mainly in what they learn between simple probability and the data distribution.
+\end{calloutmemoryhook}
+
+\section{GANs: learn a generator through an opponent}
+
+A \textbf{generative adversarial network (GAN)} trains a generator to produce samples that a discriminator cannot distinguish from observed data.
+The two data paths are
+\[
+\underbrace{z}_{\text{random source}}
+\rightarrow
+\underbrace{G_{\theta_{\text{generator}}}(z)}_{\text{generated sample}}
+\rightarrow
+\underbrace{D_{\theta_{\text{discriminator}}}}_{\text{real / fake judgement}},
+\qquad
+\underbrace{x_{\text{real}}}_{\text{observed sample}}
+\rightarrow
+D_{\theta_{\text{discriminator}}}.
+\]
+The discriminator therefore supplies a \emph{learned loss surface}: it becomes better at exposing unrealistic samples while the generator becomes better at exploiting the current discriminator.
+A classical objective is
+\[
+\min_{\theta_{\text{generator}}}\max_{\theta_{\text{discriminator}}}
+\left[
+\underbrace{\mathbb E_{x\sim p_{\text{data}}}\log D(x)}_{\text{reward recognising real data}}
++
+\underbrace{\mathbb E_{z\sim p(z)}\log\!\left(1-D(G(z))\right)}_{\text{reward rejecting generated data}}
+\right].
+\]
+This gives direct one-pass sampling after training, but optimisation is a coupled game rather than minimisation of one fixed supervised target.
+If the generator finds samples that fool the current discriminator while ignoring some real modes, \textbf{mode collapse} can produce high-quality examples with poor distribution coverage.
+Wasserstein-style objectives change the critic geometry to provide a more useful training signal, but do not remove the general cost of adversarially balancing two learned systems.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    >=Latex,
+    node distance=9mm and 13mm,
+    box/.style={draw, rounded corners=2pt, minimum width=23mm, minimum height=8mm, align=center, inner sep=3pt},
+    smallbox/.style={draw, rounded corners=2pt, minimum width=18mm, minimum height=7mm, align=center, inner sep=2pt},
+    arrow/.style={->, thick}
+]
+\node[box] (noise) {$z\sim p(z)$};
+\node[box, right=of noise] (gen) {generator\\$G_\theta$};
+\node[box, right=of gen] (fake) {$x_{\text{fake}}$};
+\node[box, right=of fake] (disc) {discriminator\\$D_\phi$};
+\node[smallbox, above=8mm of fake] (real) {$x_{\text{real}}$};
+\node[smallbox, right=of disc] (judgement) {real / fake};
+\draw[arrow] (noise) -- (gen);
+\draw[arrow] (gen) -- (fake);
+\draw[arrow] (fake) -- (disc);
+\draw[arrow] (real) -| (disc);
+\draw[arrow] (disc) -- (judgement);
+\draw[->, thick, dashed, bend right=32] (disc.south) to node[below, align=center]{training signal\\changes with critic} (gen.south);
+\end{tikzpicture}
+\caption{GAN training is a feedback system: the discriminator learns to expose current generator errors, so the generator's training signal changes as its opponent changes.}
+\label{fig:gan-flow}
+\end{figure}
+
+\begin{calloutinductivebias}
+If a learned real/fake comparison provides a useful signal for perceptual sample quality, adversarial training can learn a strong direct generator; the same coupling can be restrictive when stable optimisation or complete mode coverage matters more.
+\end{calloutinductivebias}
+
+\begin{calloutmemoryhook}
+Generator fools; discriminator exposes.
+\end{calloutmemoryhook}
+
+\section{VAEs: make the latent space sampleable}
+
+Section~5.6 introduced the VAE objective; the architectural consequence is easier to see as a data-flow constraint.
+A plain autoencoder only needs latent codes that reconstruct observed inputs, whereas a \textbf{variational autoencoder (VAE)} also forces those codes into a distribution from which new latent points can be sampled:
+\[
+\underbrace{x}_{\text{data}}
+\rightarrow
+\underbrace{q_{\theta_{\text{encoder}}}(z\mid x)}_{\text{distribution over latent codes}}
+\rightarrow
+\underbrace{z}_{\text{sampleable latent}}
+\rightarrow
+\underbrace{p_{\theta_{\text{decoder}}}(x\mid z)}_{\text{probabilistic decoder}}
+\rightarrow
+\hat x.
+\]
+The negative evidence lower bound used in Section~5.6 is already the whole trade-off:
+\[
+\underbrace{\mathcal L_{\text{VAE}}}_{\text{negative ELBO}}
+=
+\underbrace{-\mathbb E_{q(z\mid x)}\log p(x\mid z)}_{\text{reconstruct / explain observed data}}
++
+\underbrace{D_{\mathrm{KL}}\!\left(q(z\mid x)\Vert p(z)\right)}_{\text{keep latent distribution compatible with the prior}}.
+\]
+The first term rewards detailed reconstruction; the second prevents the encoder from placing every input in an arbitrary isolated region that would be difficult to sample later.
+The resulting tension is useful rather than accidental: stronger prior regularisation usually makes the latent space easier to sample but can remove information needed for reconstruction.
+
+Sampling inside the encoder would ordinarily interrupt pathwise differentiation.
+The \textbf{reparameterisation trick} moves the randomness into an external noise variable:
+\[
+\underbrace{z}_{\text{stochastic latent}}
+=
+\underbrace{\mu_{\theta_{\text{encoder}}}(x)}_{\text{latent centre}}
++
+\underbrace{\sigma_{\theta_{\text{encoder}}}(x)}_{\text{latent scale}}
+\odot
+\underbrace{\epsilon}_{\epsilon\sim\mathcal N(0,I)}.
+\]
+Gradients can now flow through $\mu$ and $\sigma$ while $\epsilon$ supplies the stochasticity.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    >=Latex,
+    node distance=9mm and 13mm,
+    box/.style={draw, rounded corners=2pt, minimum width=25mm, minimum height=8mm, align=center, inner sep=3pt},
+    arrow/.style={->, thick}
+]
+\node[box] (x) {data $x$};
+\node[box, right=of x] (enc) {encoder\\$\mu(x),\sigma(x)$};
+\node[box, right=of enc] (z) {$z=\mu+\sigma\odot\epsilon$};
+\node[box, right=of z] (dec) {decoder\\$p(x\mid z)$};
+\node[box, right=of dec] (xh) {reconstruction\\$\hat x$};
+\node[box, below=9mm of z] (prior) {prior\\$p(z)$};
+\draw[arrow] (x) -- (enc);
+\draw[arrow] (enc) -- (z);
+\draw[arrow] (z) -- (dec);
+\draw[arrow] (dec) -- (xh);
+\draw[<->, thick, dashed] (z) -- node[right, align=left]{KL keeps encoded\\latents sampleable} (prior);
+\end{tikzpicture}
+\caption{A VAE adds a distributional constraint to an autoencoder: latent codes must reconstruct the data while remaining compatible with a simple sampling prior.}
+\label{fig:vae-flow}
+\end{figure}
+
+\begin{calloutmemoryhook}
+A VAE reconstructs well without letting the latent space stop being sampleable.
+\end{calloutmemoryhook}
+
+\section{The score function: local geometry of a distribution}
+
+For diffusion, the useful object is often not the density value itself but how that density changes around the current sample.
+The \textbf{score function} at noise level $t$ is
+\[
+\boxed{
+\underbrace{s_t(x)}_{\text{score field}}
+=
+\underbrace{\nabla_x\log p_t(x)}_{\text{direction of increasing log-density}}
+}.
+\]
+The score is a vector field over sample space: near a high-density region it points in directions that locally increase probability density.
+This does not require the normalising constant of $p_t(x)$ because differentiation removes constants independent of $x$.
+Do not confuse this with the likelihood-ratio / policy-gradient ``score-function estimator'', which differentiates $\log p_\theta(x)$ with respect to parameters rather than the sample coordinates.
+
+For Gaussian corruption
+\[
+\underbrace{x_t}_{\text{noisy sample}}
+=
+\underbrace{\alpha_t x_0}_{\text{remaining signal}}
++
+\underbrace{\sigma_t\epsilon}_{\text{noise}},
+\qquad \epsilon\sim\mathcal N(0,I),
+\]
+the conditional score is
+\[
+\underbrace{\nabla_{x_t}\log p(x_t\mid x_0)}_{\text{score of the corruption kernel}}
+=
+\underbrace{-\frac{x_t-\alpha_t x_0}{\sigma_t^2}}_{-\epsilon/\sigma_t}.
+\]
+This is the bridge between \textbf{score prediction} and the common diffusion objective that predicts the added noise $\epsilon$: they are scaled versions of the same local information under Gaussian corruption.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=1.0, >=Latex]
+\draw[->] (-3.2,0) -- (3.2,0) node[right] {$x_1$};
+\draw[->] (0,-2.2) -- (0,2.2) node[above] {$x_2$};
+\draw[thick] (-1.45,0) ellipse (0.85 and 1.15);
+\draw[thick] (1.45,0) ellipse (0.85 and 1.15);
+\fill (-1.45,0) circle (2pt);
+\fill (1.45,0) circle (2pt);
+\foreach \x/\y/\tx/\ty in {
+-2.8/1.5/-1.8/0.7,
+-2.9/-1.2/-1.8/-0.5,
+-1.8/1.8/-1.55/0.8,
+-1.7/-1.8/-1.5/-0.8,
+-0.4/1.5/-1.1/0.6,
+-0.4/-1.4/-1.05/-0.6,
+2.8/1.5/1.8/0.7,
+2.9/-1.2/1.8/-0.5,
+1.8/1.8/1.55/0.8,
+1.7/-1.8/1.5/-0.8,
+0.4/1.5/1.1/0.6,
+0.4/-1.4/1.05/-0.6}
+{\draw[->, thick] (\x,\y) -- (\tx,\ty);}
+\node[align=center] at (-1.45,-2.0) {high-density\\mode};
+\node[align=center] at (1.45,-2.0) {high-density\\mode};
+\end{tikzpicture}
+\caption{Schematic score field for a bimodal distribution. Arrows indicate local directions of increasing log-density; the exact field between overlapping modes depends on their relative densities and scales.}
+\label{fig:score-field}
+\end{figure}
+
+\begin{calloutmemoryhook}
+Score points uphill in log-density.
+\end{calloutmemoryhook}
+
+\section{Diffusion: design corruption, learn the reverse}
+
+\paragraph{Forward process.}
+A diffusion model first defines a corruption process that gradually removes information from data until the terminal distribution is close to simple Gaussian noise.
+For a standard discrete Gaussian process,
+\[
+\underbrace{q(x_t\mid x_{t-1})}_{\text{one corruption step}}
+=
+\mathcal N\!\left(
+\underbrace{\sqrt{1-\beta_t}\,x_{t-1}}_{\text{retain signal}},
+\underbrace{\beta_t I}_{\text{add noise}}
+\right).
+\]
+Writing $\alpha_t=1-\beta_t$ and $\bar\alpha_t=\prod_{s=1}^{t}\alpha_s$ collapses all earlier corruption steps into one direct sample:
+\[
+\boxed{
+\underbrace{x_t}_{\text{sample at noise level }t}
+=
+\underbrace{\sqrt{\bar\alpha_t}\,x_0}_{\text{remaining data signal}}
++
+\underbrace{\sqrt{1-\bar\alpha_t}\,\epsilon}_{\text{known Gaussian corruption}},
+\qquad \epsilon\sim\mathcal N(0,I)
+}.
+\]
+Training therefore does not need to simulate every previous corruption step before constructing $x_t$.
+The schedule $\{\beta_t\}$ controls how signal-to-noise ratio is distributed across time and is a real research choice rather than bookkeeping.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    >=Latex,
+    stage/.style={draw, rounded corners=2pt, minimum width=29mm, minimum height=27mm, inner sep=2pt},
+    arrow/.style={->, thick}
+]
+\node[stage] (s0) at (0,0) {};
+\node[stage] (s1) at (3.6,0) {};
+\node[stage] (s2) at (7.2,0) {};
+\node[stage] (s3) at (10.8,0) {};
+% structured clusters
+\foreach \x/\y in {-0.8/0.6,-0.65/0.45,-0.7/0.8,-0.5/0.65,0.7/0.6,0.55/0.45,0.75/0.8,0.5/0.7,-0.8/-0.65,-0.6/-0.5,-0.7/-0.8,-0.5/-0.65,0.7/-0.65,0.55/-0.5,0.75/-0.8,0.5/-0.7}
+{\fill ($(s0.center)+(\x,\y)$) circle (1.35pt);}
+% light corruption
+\foreach \x/\y in {-0.95/0.85,-0.55/0.25,-0.9/0.35,-0.35/0.95,0.95/0.8,0.35/0.25,0.95/0.35,0.25/0.95,-0.95/-0.8,-0.35/-0.25,-0.9/-0.35,-0.25/-1.0,0.9/-0.85,0.35/-0.2,1.0/-0.4,0.25/-0.95}
+{\fill ($(s1.center)+(\x,\y)$) circle (1.35pt);}
+% heavy corruption
+\foreach \x/\y in {-1.0/0.9,-0.7/0.15,-0.8/-0.4,-0.3/1.0,-0.1/0.35,0.25/0.9,0.45/-0.1,0.9/0.75,1.05/0.0,0.75/-0.8,0.2/-0.95,-0.3/-0.6,-0.9/-0.95,0.55/0.4,0.1/0.05,-0.5/0.55}
+{\fill ($(s2.center)+(\x,\y)$) circle (1.35pt);}
+% approximate isotropic noise
+\foreach \x/\y in {-1.05/0.45,-0.8/-0.65,-0.55/0.95,-0.45/0.15,-0.25/-0.25,-0.1/0.7,0.05/-0.95,0.2/0.2,0.35/0.85,0.45/-0.55,0.65/0.4,0.8/-0.15,0.95/0.75,1.0/-0.8,-0.75/0.1,0.1/-0.35}
+{\fill ($(s3.center)+(\x,\y)$) circle (1.35pt);}
+\draw[arrow] (s0) -- node[above] {add noise} (s1);
+\draw[arrow] (s1) -- node[above] {add noise} (s2);
+\draw[arrow] (s2) -- node[above] {add noise} (s3);
+\node[below=2mm of s0] {$x_0$: structured data};
+\node[below=2mm of s1] {$x_t$: partial signal};
+\node[below=2mm of s2] {$x_t$: low SNR};
+\node[below=2mm of s3] {$x_T\approx\mathcal N(0,I)$};
+\draw[<-, very thick, dashed] ($(s0.north)+(0,3mm)$) -- node[above]{learned reverse dynamics} ($(s3.north)+(0,3mm)$);
+\end{tikzpicture}
+\caption{Diffusion separates the problem into a known forward corruption path and a learned reverse path. The point clouds are schematic: increasing $t$ destroys multimodal structure until only an approximately simple noise distribution remains.}
+\label{fig:diffusion-forward-reverse}
+\end{figure}
+
+\paragraph{Reverse process.}
+Generation starts at the easy end, $x_T\sim\mathcal N(0,I)$, and repeatedly predicts enough local information to move toward cleaner samples.
+In a DDPM-style parameterisation,
+\[
+\underbrace{p_\theta(x_{t-1}\mid x_t)}_{\text{learned reverse step}}
+=
+\mathcal N\!\left(
+\underbrace{\mu_\theta(x_t,t)}_{\text{predicted denoising move}},
+\underbrace{\sigma_t^2 I}_{\text{reverse-step randomness}}
+\right).
+\]
+A common network target is the exact noise $\epsilon$ used to construct $x_t$, because that target is available during training.
+From the same noisy input $x_t$, related parameterisations can instead predict the clean sample $x_0$, the score, or a velocity-like $v$ target; these are different numerical views of closely related reverse information rather than separate generative families.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\linewidth}{>{\bfseries}l X X}
+\toprule
+Prediction target & Network learns & Main consequence \\
+\midrule
+$\epsilon$-prediction & added Gaussian noise & simple supervised target; common DDPM parameterisation \\
+$x_0$-prediction & clean sample estimate & directly interpretable reconstruction target; scaling changes with SNR \\
+score prediction & $\nabla_x\log p_t(x)$ & exposes the reverse-SDE connection directly \\
+$v$-prediction & a weighted combination of clean signal and noise & changes target scaling across noise levels; common in modern latent systems \\
+\bottomrule
+\end{tabularx}
+\caption{Diffusion prediction parameterisation is a design choice inside the same broad reverse-process idea.}
+\label{tab:diffusion-targets}
+\end{table}
+
+\begin{calloutmemoryhook}
+Forward diffusion is designed corruption; the model learns the reverse information.
+\end{calloutmemoryhook}
+
+\section{DDPM and DDIM: separate the model from the sampler}
+
+The denoising network and the numerical path used to turn noise into data are separate design layers.
+A \textbf{DDPM} follows stochastic reverse transitions, injecting randomness while stepping through the learned reverse chain.
+A canonical \textbf{DDIM} sampler can reuse a DDPM-trained network while following a non-Markovian path that becomes deterministic when its stochasticity parameter is set to zero.
+This matters because changing the sampler can alter inference speed and trajectories without retraining the underlying denoiser.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\linewidth}{>{\bfseries}l X X}
+\toprule
+ & DDPM & DDIM \\
+\midrule
+Learned denoiser & can be the same trained network & can be the same trained network \\
+Reverse path & stochastic Markov chain & non-Markovian construction; can be deterministic \\
+Noise during sampling & normally retained & optional; zero gives deterministic sampling \\
+Practical use & canonical probabilistic reverse process & change trajectory / use fewer selected timesteps without changing the training family \\
+\bottomrule
+\end{tabularx}
+\caption{DDPM versus DDIM is primarily a sampler distinction, not a statement that two different neural architectures must be trained.}
+\label{tab:ddpm-ddim}
+\end{table}
+
+\begin{calloutmemoryhook}
+Same denoiser; different sampling path.
+\end{calloutmemoryhook}
+
+\section{Continuous diffusion: SDE and probability-flow views}
+
+The discrete sequence $x_0,x_1,\ldots,x_T$ can be taken to continuous time, where the forward corruption becomes a stochastic differential equation (SDE):
+\[
+\boxed{
+\underbrace{dx}_{\text{state change}}
+=
+\underbrace{f(x,t)\,dt}_{\text{deterministic drift}}
++
+\underbrace{g(t)\,dW_t}_{\text{random diffusion}}
+}.
+\]
+The corresponding reverse-time SDE depends on the score of the noisy marginal distribution:
+\[
+\underbrace{dx}_{\text{reverse-time change}}
+=
+\underbrace{\left[f(x,t)-g(t)^2\nabla_x\log p_t(x)\right]dt}_{\text{drift corrected by the learned score}}
++
+\underbrace{g(t)\,d\bar W_t}_{\text{reverse-time randomness}},
+\qquad t:T\rightarrow0.
+\]
+The score therefore supplies exactly the missing information required to reverse a known diffusion process.
+Under an exact score, the same sequence of marginal distributions can also be generated by the deterministic \textbf{probability-flow ODE}:
+\[
+\boxed{
+\frac{dx}{dt}
+=
+\underbrace{f(x,t)-\frac{1}{2}g(t)^2\nabla_x\log p_t(x)}_{\text{deterministic velocity with the same marginals}}
+}.
+\]
+This is the key bridge from diffusion to ODE-based generative modelling: stochastic and deterministic trajectories can represent the same evolving marginal densities while moving individual samples differently.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    >=Latex,
+    node distance=10mm and 18mm,
+    box/.style={draw, rounded corners=2pt, minimum width=28mm, minimum height=9mm, align=center, inner sep=3pt},
+    arrow/.style={->, thick}
+]
+\node[box] (data) {data distribution\\$p_0$};
+\node[box, right=45mm of data] (noise) {simple noise\\$p_T$};
+\draw[arrow, bend left=18] (data) to node[above]{forward SDE: known corruption} (noise);
+\draw[arrow, bend left=18] (noise) to node[below]{reverse SDE: score + randomness} (data);
+\node[box, below=17mm of $(data)!0.5!(noise)$] (ode) {probability-flow ODE\\score + deterministic integration};
+\draw[arrow] (noise) -- (ode);
+\draw[arrow] (ode) -- (data);
+\end{tikzpicture}
+\caption{The continuous-time score view separates the known forward SDE from two valid reverse constructions: a stochastic reverse SDE and a deterministic probability-flow ODE.}
+\label{fig:sde-ode}
+\end{figure}
+
+\begin{calloutmemoryhook}
+Reverse diffusion needs the score; the same marginals can also be followed by a deterministic probability-flow ODE.
+\end{calloutmemoryhook}
+
+\section{Flow matching: learn the motion directly}
+
+A continuous normalising flow generates data by integrating a time-dependent velocity field:
+\[
+\boxed{
+\underbrace{\frac{dx_t}{dt}}_{\text{sample motion}}
+=
+\underbrace{v_{\theta}(x_t,t)}_{\text{learned velocity field}}
+}.
+\]
+\textbf{Flow matching} trains this velocity field by first choosing a probability path between a simple source distribution and the data distribution, then regressing the velocity required along that path.
+In its abstract form,
+\[
+\underbrace{\mathcal L_{\text{FM}}}_{\text{flow-matching loss}}
+=
+\mathbb E_{t,x_t}
+\left[
+\underbrace{\left\|v_\theta(x_t,t)-u_t(x_t)\right\|_2^2}_{\text{match the target velocity field}}
+\right].
+\]
+The important design choice has therefore moved from a noise schedule and reverse stochastic process to the \textbf{probability path / coupling} and the velocity field that transports mass along it.
+
+A useful special case pairs noise $x_{\text{noise}}$ with data $x_{\text{data}}$ and uses a straight interpolation:
+\[
+\underbrace{x_t}_{\text{point on the path}}
+=
+\underbrace{(1-t)x_{\text{noise}}+t x_{\text{data}}}_{\text{straight interpolation}},
+\qquad
+\underbrace{\frac{dx_t}{dt}}_{\text{target pairwise velocity}}
+=
+\underbrace{x_{\text{data}}-x_{\text{noise}}}_{\text{straight-line displacement}}.
+\]
+This is a useful intuition for rectified / straight-line flows, but general flow matching can use other probability paths and couplings.
+
+The distinction from score modelling is conceptual:
+\[
+\underbrace{\nabla_x\log p_t(x)}_{\text{score}}
+=\text{where density locally increases},
+\qquad
+\underbrace{v_t(x)}_{\text{velocity}}
+=\text{where a sample should move next}.
+\]
+These fields can be mathematically related for particular paths, but they answer different local questions.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[>=Latex]
+% left panel score
+\begin{scope}[xshift=0cm]
+\draw[rounded corners=2pt] (-3,-2.1) rectangle (3,2.2);
+\node[font=\bfseries] at (0,1.85) {Score field};
+\fill (-1.2,0) circle (2pt);
+\fill (1.2,0) circle (2pt);
+\draw[thick] (-1.2,0) ellipse (0.7 and 0.95);
+\draw[thick] (1.2,0) ellipse (0.7 and 0.95);
+\foreach \x/\y/\tx/\ty in {-2.4/1.2/-1.55/0.45,-2.4/-1.1/-1.55/-0.4,-0.2/1.25/-0.85/0.5,-0.2/-1.2/-0.85/-0.5,2.4/1.2/1.55/0.45,2.4/-1.1/1.55/-0.4,0.2/1.25/0.85/0.5,0.2/-1.2/0.85/-0.5}
+{\draw[->, thick] (\x,\y) -- (\tx,\ty);}
+\node[align=center] at (0,-1.75) {local density geometry};
+\end{scope}
+% right panel flow
+\begin{scope}[xshift=7cm]
+\draw[rounded corners=2pt] (-3,-2.1) rectangle (3,2.2);
+\node[font=\bfseries] at (0,1.85) {Velocity field};
+\fill (-2.2,-0.8) circle (1.7pt);
+\fill (-2.2,0) circle (1.7pt);
+\fill (-2.2,0.8) circle (1.7pt);
+\fill (2.1,-0.7) circle (2pt);
+\fill (2.1,0.7) circle (2pt);
+\draw[->, thick] (-2.05,-0.8) .. controls (-0.8,-1.1) and (0.8,-0.9) .. (1.9,-0.7);
+\draw[->, thick] (-2.05,0) .. controls (-0.5,0.1) and (0.5,0.6) .. (1.9,0.7);
+\draw[->, thick] (-2.05,0.8) .. controls (-0.8,1.0) and (0.8,0.95) .. (1.9,0.7);
+\node[align=center] at (0,-1.75) {transport through time};
+\end{scope}
+\end{tikzpicture}
+\caption{Score and flow fields contain different local information. A score points toward higher current density; a velocity field specifies temporal motion along a chosen transport path.}
+\label{fig:score-vs-flow}
+\end{figure}
+
+\begin{calloutspecialcase}
+A straight interpolation with target velocity $x_{\text{data}}-x_{\text{noise}}$ is a useful rectified-flow mental model, not the definition of all flow matching.
+\end{calloutspecialcase}
+
+\begin{calloutmemoryhook}
+Flow matching learns how samples should move.
+\end{calloutmemoryhook}
+
+\section{Classifier-free guidance: amplify the conditioning direction}
+
+Conditional generation asks for samples from a distribution such as $p(x\mid c)$, where $c$ may be a class, text embedding or other context.
+\textbf{Classifier-free guidance (CFG)} trains one model to operate both with the condition and with an intentionally dropped condition, so inference can compare the two predictions without a separate classifier.
+For a generic model output $\hat y$,
+\[
+\boxed{
+\underbrace{\hat y_{\text{guided}}}_{\text{prediction used by the sampler}}
+=
+\underbrace{\hat y_{\text{uncond}}}_{\text{what fits without the condition}}
++
+\underbrace{s_{\text{guidance}}
+\left(\hat y_{\text{cond}}-\hat y_{\text{uncond}}\right)}_{\text{amplified direction attributable to the condition}}
+}.
+\]
+The output $\hat y$ may be a noise, score or velocity parameterisation; CFG acts on the model prediction used by the sampler rather than defining the underlying generative family.
+At $s_{\text{guidance}}=1$ this expression returns the ordinary conditional prediction, while larger values extrapolate farther in the conditional direction.
+Stronger guidance usually increases condition adherence but can reduce diversity and eventually distort or oversaturate samples.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=1.15, >=Latex]
+\coordinate (o) at (0,0);
+\coordinate (u) at (2.2,0.7);
+\coordinate (c) at (3.0,1.8);
+\coordinate (g) at (4.6,3.25);
+\draw[->, thick] (o) -- (u) node[midway, below] {$\hat y_{\text{uncond}}$};
+\draw[->, thick] (o) -- (c) node[midway, above left] {$\hat y_{\text{cond}}$};
+\draw[->, thick, dashed] (u) -- (c) node[midway, right] {$\hat y_{\text{cond}}-\hat y_{\text{uncond}}$};
+\draw[->, very thick] (o) -- (g) node[midway, above left] {$\hat y_{\text{guided}}$};
+\draw[densely dotted] (u) -- (g);
+\fill (o) circle (1.5pt);
+\node[below left] at (o) {origin};
+\end{tikzpicture}
+\caption{CFG treats the conditional-minus-unconditional difference as a guidance direction and scales it during inference. The diagram is geometric intuition, not a claim that model-output space is globally linear.}
+\label{fig:cfg-vector}
+\end{figure}
+
+\begin{calloutdegreeofexperiment}
+Vary conditioning-drop probability during training and guidance strength during sampling; measure condition adherence, diversity, sample quality and failure rate rather than assuming stronger guidance is universally better.
+\end{calloutdegreeofexperiment}
+
+\begin{calloutmemoryhook}
+Classifier-free guidance amplifies what the condition changed.
+\end{calloutmemoryhook}
+
+\section{Modern composition: objective $\neq$ representation $\neq$ backbone $\neq$ sampler}
+
+Modern image and multimodal systems commonly combine several ideas that live at different design layers.
+A \textbf{latent diffusion / latent flow} system first compresses data with an autoencoder-like representation, learns diffusion or flow dynamics in that cheaper latent space, then decodes the generated latent back to the original space.
+This trades some representation fidelity for much lower generative-model compute because the expensive field network operates on fewer spatial dimensions.
+A U-Net or Transformer/DiT can then parameterise the denoising, score or velocity field, while CFG and the numerical sampler remain separate inference choices.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    >=Latex,
+    node distance=9mm and 11mm,
+    box/.style={draw, rounded corners=2pt, minimum width=23mm, minimum height=8mm, align=center, inner sep=3pt},
+    arrow/.style={->, thick}
+]
+\node[box] (data) {data $x$};
+\node[box, right=of data] (enc) {latent encoder};
+\node[box, right=of enc] (latent) {latent $z$};
+\node[box, right=of latent, minimum width=31mm] (field) {field network\\U-Net / DiT / other};
+\node[box, right=of field] (zgen) {generated latent};
+\node[box, right=of zgen] (dec) {latent decoder};
+\node[box, right=of dec] (out) {generated $x$};
+\node[box, above=9mm of field] (cond) {condition $c$};
+\node[box, below=9mm of field] (sampler) {sampler / solver\\DDIM, SDE, ODE, \ldots};
+\draw[arrow] (data) -- (enc);
+\draw[arrow] (enc) -- (latent);
+\draw[arrow] (latent) -- (field);
+\draw[arrow] (field) -- (zgen);
+\draw[arrow] (zgen) -- (dec);
+\draw[arrow] (dec) -- (out);
+\draw[arrow] (cond) -- (field);
+\draw[arrow] (sampler) -- (field);
+\end{tikzpicture}
+\caption{A modern generative system composes independent design layers: representation, field-prediction backbone, conditioning and numerical sampler. Treating them as one method creates category errors.}
+\label{fig:modern-generative-stack}
+\end{figure}
+
+\begin{calloutintuition}
+``DiT'', ``latent diffusion'', ``flow matching'', ``CFG'' and ``DDIM'' are not five competing model families: they can describe different layers of one system.
+\end{calloutintuition}
+
+\section{Research evolution: which object should generation learn?}
+
+The useful history is an accumulation of different answers to the same transport problem rather than a clean sequence in which one family replaces the previous one.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\linewidth}{>{\bfseries}l X X X}
+\toprule
+Step & What changed & Problem targeted & New trade-off \\
+\midrule
+VAE & probabilistic latent space plus decoder & sampleable structured representation & reconstruction versus prior compatibility \\
+GAN & adversarially learned generator & direct high-quality samples & unstable coupled optimisation / mode coverage \\
+Score matching & learn local log-density gradients & avoid explicit normalised density modelling & sampling dynamics still required \\
+DDPM & train denoising across known noise levels & stable scalable score-like learning & many reverse evaluations \\
+DDIM / improved solvers & separate sampler from trained denoiser & reduce inference cost / change trajectory & numerical approximation and sampler choices \\
+Score SDE & continuous-time diffusion formulation & unify score models and diffusion paths & additional continuous-time machinery \\
+Flow matching & directly regress transport velocity & train ODE transport without simulating a reverse SDE & probability path / coupling becomes a major design choice \\
+Distillation / consistency-style methods & compress many-step trajectories & sampling latency & extra training and approximation error \\
+\bottomrule
+\end{tabularx}
+\caption{A compact evolution of generative mechanisms. Each step changes which object is learned or how the learned field is sampled.}
+\label{tab:generative-evolution}
+\end{table}
+
+\section{Research optionality: what exactly can be changed?}
+
+As in attention research, the useful question is not only ``which generative model is best?'' but \textbf{which design layer is being changed}.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\linewidth}{>{\bfseries}l X X}
+\toprule
+Degree of experiment & Representative choices & Mechanism to measure \\
+\midrule
+Representation & pixels, compressed latent, discrete tokens & reconstruction loss, compute, memory, retained detail \\
+Generative mechanism & adversarial, latent-variable, diffusion/score, flow & stability, mode coverage, likelihood/sample quality, sampling cost \\
+Probability path & noise schedule, interpolation, transport coupling & target difficulty, path curvature, number of useful steps \\
+Prediction target & $\epsilon$, $x_0$, score, $v$, velocity field & target scale across SNR/time, optimisation stability \\
+Backbone & U-Net, CNN, Transformer/DiT, hybrid & quality versus parameters, FLOPs, memory \\
+Conditioning route & concatenation, cross-attention, modulation & controllability, compute, information bottleneck \\
+Guidance & none, classifier, classifier-free; vary strength & adherence versus diversity / artefacts \\
+Time representation & discrete embedding, continuous embedding & interpolation across timesteps / solver compatibility \\
+Sampler / solver & DDPM, DDIM, SDE solver, ODE solver & function evaluations, latency, stochasticity, error \\
+Sampling budget & number and placement of steps & quality--latency curve \\
+Training weighting & loss weight across time / SNR & which noise regimes dominate learning \\
+\bottomrule
+\end{tabularx}
+\caption{Generative modelling has several distinct research layers; ablations should avoid conflating architectural, objective and solver changes.}
+\label{tab:generative-optionality}
+\end{table}
+
+\begin{calloutdegreeofexperiment}
+For diffusion/flow research, vary representation, probability path, prediction target, backbone, conditioning route, guidance, time weighting, solver and sampling budget; ablate one design layer at a time where possible.
+\end{calloutdegreeofexperiment}
+
+\section{Inductive bias and model choice}
+
+Each family assumes that a particular intermediate learning problem is easier than modelling the data distribution directly.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\linewidth}{>{\bfseries}l X X X}
+\toprule
+Method & Useful assumption & What the assumption buys & Main restriction / cost \\
+\midrule
+VAE & complex data can be organised through a simple latent prior & sampleable latent representation and interpolation & prior regularisation can discard reconstruction detail \\
+GAN & a learned critic provides useful gradients for sample realism & direct one-pass generator after training & adversarial instability and possible mode collapse \\
+Diffusion & a hard distribution can be reached by reversing many easy local corruptions & stable supervised denoising targets across noise levels & iterative inference \\
+Score model & local log-density geometry is sufficient to build sampling dynamics & no need to model a normalised density directly & numerical dynamics still required \\
+Flow matching & a useful probability path and coupling can be specified & direct velocity regression for ODE transport & a poor path can make the learned transport unnecessarily difficult \\
+CFG & conditional--unconditional difference isolates useful conditioning information & inference-time controllability without a separate classifier & excessive guidance can reduce diversity and distort samples \\
+\bottomrule
+\end{tabularx}
+\caption{Generative methods as inductive biases: each turns generation into a different intermediate prediction problem.}
+\label{tab:generative-inductive-bias}
+\end{table}
+
+\section{Final compression}
+
+If you remember only the core distinctions:
+\begin{enumerate}
+    \item A generative model learns a route from an easy source distribution to the data distribution.
+    \item A VAE makes an autoencoder's latent space probabilistic and sampleable by balancing reconstruction against prior compatibility.
+    \item A GAN learns a direct generator from a discriminator whose own parameters change during training.
+    \item The score $\nabla_x\log p_t(x)$ is local log-density geometry; under Gaussian corruption it is directly related to the noise that diffusion models predict.
+    \item Forward diffusion deliberately destroys information with a known process; the neural network learns reverse information.
+    \item DDPM versus DDIM is mainly a sampler distinction: the same denoiser can support stochastic or deterministic-style trajectories.
+    \item In continuous time, reverse diffusion uses the score inside a reverse SDE; a probability-flow ODE follows the same marginal distributions deterministically under an exact score.
+    \item Flow matching directly learns a velocity field for a chosen probability path rather than first defining generation as reverse stochastic corruption.
+    \item Classifier-free guidance scales the conditional-minus-unconditional model prediction during sampling.
+    \item Representation, backbone, generative objective, conditioning, guidance and sampler are separate research layers and can be combined.
+\end{enumerate}
+
+\begin{calloutmemoryhook}
+When reading a new generative-model paper, ask: what distribution path is assumed, what field/object is learned, what target teaches it, and how is that object integrated at inference?
+\end{calloutmemoryhook}

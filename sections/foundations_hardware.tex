@@ -1,0 +1,626 @@
+\chapter{Foundations: Hardware}
+\label{sec:hardware}
+
+Hardware issues are normally about\textbf{where work happens, where bytes move, and what waits for what}, because compute is surrounded by memory, launch overheads, scheduling and synchronising. 
+
+\[
+    \underbrace{T_{\text{step}}}_{\text{wall-clock step time}}
+    &\approx
+    \underbrace{T_{\text{exposed compute}}}_{\text{arithmetic on critical path}}
+    +
+    \underbrace{T_{\text{exposed memory}}}_{\text{local movement}}
+    \quad+
+    \underbrace{T_{\text{exposed communication}}}_{\text{GPU / node movement}}
+    +
+    \underbrace{T_{\text{launch + queue + sync}}}_{\text{coordination}}.
+\]
+
+Summing the raw duration of every kernel, copy, and collective can overestimate wall-clock time by ignoring overlapping work.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  node distance=3.8mm and 7mm,
+  box/.style={draw, rounded corners=2pt, minimum height=7.5mm, text width=3.25cm, align=center, inner sep=3pt},
+  arr/.style={-{Latex[length=2mm]}, thick},
+  lab/.style={font=\scriptsize, align=left}
+]
+\node[box] (model) {model / workload\\\texttt{PyTorch}, JAX};
+\node[box, below=of model] (compiler) {graph compiler\\\texttt{torch.compile}, XLA};
+\node[box, below=of compiler] (kernels) {kernels\\CUDA, Triton, CuTe, libraries};
+\node[box, below=of kernels] (gpu) {GPU execution\\blocks $\rightarrow$ warps $\rightarrow$ SMs};
+\node[box, below=of gpu] (mem) {local memory\\registers $\rightarrow$ L1/shared $\rightarrow$ L2 $\rightarrow$ HBM};
+\node[box, below=of mem] (fabric) {node / cluster fabric\\NVLink, PCIe, NIC, network};
+\node[box, below=of fabric] (runtime) {communication runtime\\NCCL, NVSHMEM, MPI, UCX, UCC};
+\node[box, below=of runtime] (system) {training / serving\\Megatron, vLLM, SGLang, TRT-LLM, Dynamo};
+\draw[arr] (model) -- (compiler);
+\draw[arr] (compiler) -- (kernels);
+\draw[arr] (kernels) -- (gpu);
+\draw[arr] (gpu) -- (mem);
+\draw[arr] (mem) -- (fabric);
+\draw[arr] (fabric) -- (runtime);
+\draw[arr] (runtime) -- (system);
+\node[lab, right=8mm of compiler] {higher layers choose more of \emph{what}\\lower layers choose more of \emph{how}};
+\node[lab, right=8mm of mem] {the same tensor acquires a\\physical location and transfer path};
+\node[lab, right=8mm of runtime] {logical communication is mapped\\onto heterogeneous links};
+\end{tikzpicture}
+\label{fig:hardware-stack}
+\end{figure}
+
+
+\section{The GPU}
+\label{sec:hardware-one-gpu}
+
+Imagine you are a General in an army and you need to build a road to a location.
+You can parallelise the work by having the workers stand in a long line and each build a small section of road.
+However, you are one person and so you can't instruct every individual soldier. 
+So, you divide them into a hierarchy (platoons, regiments, whatever) and pass instructions down through the layers. 
+The tactical plan distributed throughout your army is the \textbf{kernel}.
+This is one of the most overloaded terms in computer science, behind only model, as Aleksa Gordić eloquently put it.
+You can command at each layer separately, or allow your layers to self-assign tasks based on your general instructions.
+In this line of thinking, soldiers are your processing cores.
+
+\paragraph{CPU versus GPU}
+Some military tasks require every soldier to conduct the same task, like building a road, and others require each soldier to handle a different task, like manning a roadblock.
+The optimal management hierarchy for each task is different, just like in computer science. 
+A CPU has a small number of sophisticated cores, large caches, branch prediction, and low-latency response to irregular control flow - like an army handling roadblocks, storming a beach, or handling a natural disaster.
+A GPU spends much more of the machine on executing many similar operations concurrently - like an army building a road.
+
+
+\begin{figure}[H]
+    \centering
+    \resizebox{0.98\textwidth}{!}{%
+    \begin{tikzpicture}[
+      arr/.style={-{Latex[length=2mm]}, thick},
+      box/.style={draw, rounded corners=2pt, minimum width=2.4cm, minimum height=8mm, align=center},
+      smallbox/.style={draw, rounded corners=1pt, minimum width=1.55cm, minimum height=6.5mm, align=center, font=\small}
+    ]
+    \node[box] (host) {CPU host\\launch};
+    \node[box, right=16mm of host] (grid) {GPU grid};
+    \node[smallbox, right=12mm of grid, yshift=11mm] (b0) {block 0};
+    \node[smallbox, right=12mm of grid] (b1) {block 1};
+    \node[smallbox, right=12mm of grid, yshift=-11mm] (b2) {block 2};
+    \node[box, right=16mm of b1] (warps) {warps\\32 threads};
+    \node[box, right=16mm of warps] (sms) {SMs\\schedule warps};
+    \draw[arr] (host) -- node[above,font=\scriptsize]{kernel + arguments} (grid);
+    \draw[arr] (grid) -- (b0);
+    \draw[arr] (grid) -- (b1);
+    \draw[arr] (grid) -- (b2);
+    \draw[arr] (b0.east) -- (warps.west);
+    \draw[arr] (b1.east) -- (warps.west);
+    \draw[arr] (b2.east) -- (warps.west);
+    \draw[arr] (warps) -- (sms);
+    \node[font=\scriptsize, align=center, below=7mm of b1] {blocks define cooperation\\and shared-memory scope};
+    \node[font=\scriptsize, align=center, below=7mm of sms] {warps are the NVIDIA\\execution grouping};
+    \end{tikzpicture}%
+    }
+    \caption{Software decomposes a kernel into blocks and threads; NVIDIA hardware schedules threads in warps onto streaming multiprocessors (SMs).}
+    \label{fig:gpu-execution}
+\end{figure}
+
+\paragraph{Blocks, Threads, Warps, and SMs}
+A \textbf{thread} is the logical execution instance exposed by CUDA, it is the bit of the GPU that does your computation.
+It is the soldier.
+CUDA groups threads into blocks, and hardware organises each block into warps.
+A \textbf{block} groups threads that can share memory and barriers, meaning they might read the same input data and do different computations on it.
+These are like regiments or other large management structures which operate on shared plans.
+A \textbf{warp} is then a cluster of (normally) 32 threads which are scheduled together by the \textbf{Streaming Multiprocessor} (SM).
+The SM is like a planning division of the army and the warp is a small group of synchronised soldiers like a platoon or squad.
+
+If a block contains only 10 threads, it still occupies one 32-lane warp, but only 10 lanes are active.
+The other 22 lanes produce no results, just like how squad/platoons are deployed together.
+
+\begin{calloutmemoryhook}
+Blocks let threads share memory and synchronise.
+SMs schedule their warps.
+Warps are groups of 32 threads executing together, like a squad/platoon.
+\end{calloutmemoryhook}
+
+\paragraph{Time on Host versus Device.}
+
+The CPU queues work to the GPU, it does not actually call GPU threads.
+With asynchronous CPU queue adds, the measured program and the completed device work are not necessarily at the same point in time.
+This time discrepancy is a common profiling error.
+
+\paragraph{Memory Hierarchy}
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  level/.style={draw, rounded corners=2pt, align=center, minimum height=7mm},
+  arr/.style={-{Latex[length=2mm]}, thick}
+]
+\node[level, minimum width=3.0cm] (reg) {registers\\per-thread};
+\node[level, minimum width=4.0cm, below=3mm of reg] (shared) {shared memory / L1\\block / SM-local reuse};
+\node[level, minimum width=5.0cm, below=3mm of shared] (l2) {L2 cache\\device-wide cache};
+\node[level, minimum width=6.0cm, below=3mm of l2] (hbm) {HBM\\weights, activations, KV, optimiser state};
+\node[level, minimum width=7.0cm, below=3mm of hbm] (links) {NVLink / PCIe / NIC / network\\another GPU, host, or node};
+\draw[arr] (reg) -- (shared);
+\draw[arr] (shared) -- (l2);
+\draw[arr] (l2) -- (hbm);
+\draw[arr] (hbm) -- (links);
+\node[font=\scriptsize, align=right, left=8mm of shared] {nearer\\smaller\\explicit reuse};
+\node[font=\scriptsize, align=right, left=8mm of hbm] {farther\\larger\\more movement};
+\end{tikzpicture}
+\caption{Qualitative accelerator memory hierarchy. 
+The main concern is which values can be loaded once and reused before they fall to a slower level.}
+\label{fig:gpu-memory-hierarchy}
+\end{figure}
+
+\paragraph{Registers and Shared memory}
+Registers are the fastest, lowest-level on-chip memory unit by providing fast per-thread storage.
+More register or shared-memory use can reduce HBM traffic, but both consume SM resources and can reduce the number of resident warps or blocks.
+For soldiers, carrying a notepad avoids repeated trips to a depot, but limited space for equipment means fewer soldiers can work at once.
+
+
+\paragraph{Coalescing}
+Memory coalescing is a GPU hardware optimisation technique that combines separate global memory (DRAM) access requests from multiple threads in a warp into a single, consolidated memory transaction.
+Neighbouring threads should ideally request memory in a pattern that can be served by a small number of memory transactions.
+This means delivering adjacent supplies together in a small number of trips, rather than sending a vehicle per soldier.
+
+
+\paragraph{Tiling}
+A tile loads a chunk into a nearby memory level and reuses it across several operations.
+GEMM, convolution, attention, transpose, and many reductions differ in mathematics but reuse the same systems idea: \textit{one expensive load should pay for as much useful work as possible}.
+Imagine bringing a batch of supplies into a nearby depot and reusing them across many tasks before fetching the next batch.
+
+\paragraph{Occupancy}
+This is the ratio of active concurrent warps on a GPU's SM to the maximum number of active warps.
+Resident warps hide latency because the scheduler can switch to independent work, but maximum occupancy is not the objective.
+A kernel can be faster at lower occupancy if a larger tile, more registers, or more shared memory increases useful work per byte enough to compensate.
+As a general, ask yourself: \textit{How many platoons can remain ready at this worksite, against its capacity?}
+
+\begin{calloutdegreeexperiment}
+    For one kernel, useful variables include tile shape, threads or warps, pipeline stages, vector width, dtype, tensor layout, shared-memory use, register pressure, launch grid, and fusion boundary.
+\end{calloutdegreeexperiment}
+
+\section{Performance Arithmetic}
+\label{sec:hardware-roofline}
+The balance between \textit{waiting for data} and \textit{computation is slow} is the \textbf{arithmetic intensity}:
+\[
+    \underbrace{I}_{\text{arithmetic intensity}}
+    =
+    \frac{\overbrace{N_{\text{useful FLOPs}}}^{\text{arithmetic}}}
+    {\underbrace{N_{\text{bytes crossing the boundary}}}_{\text{movement}}}.
+\]
+A simple bound is
+\[
+    \underbrace{P_{\text{achievable}}}_{\text{FLOP/s}}
+    \leq
+    \min\!\left(
+    \underbrace{P_{\text{peak compute}}}_{\text{compute roof}},
+    \underbrace{B_{\text{memory}}I}_{\text{bandwidth roof}}
+    \right).
+\]
+
+Problems:
+\begin{itemize}
+    \item \textbf{Bandwidth-bound kernel:} Impacted by fusion, reuse, layout, quantisation, or fewer reads. 
+    Not impacted by reducing FLOPS.
+    Large invasions are communication limited because you must communicate complex, time sensitive information across a range of tasks in sync - better connection is decisive.
+    \item \textbf{Compute-bound kernel: } Impacted by tensor-core use, instruction throughput, precision, or tile scheduling. 
+    Individually complex tasks like seizing an armoured bunker require each soldier's raw strength is decisive.
+\end{itemize}
+
+\subsection{Performance Arithmetic Order-of-Magnitude Thinking}
+Order-of-magnitude estimates can reject impossible designs before a cluster is reserved.
+For model state,
+\[
+\underbrace{M_{\text{weights}}}_{\text{parameter memory}}
+\approx
+\underbrace{N_{\text{parameters}}}_{\text{parameter count}}
+\underbrace{N_{\text{bytes/parameter}}}_{\text{stored precision}},
+\]
+then gradients, optimiser state, activations, temporary workspaces, and replicas are added separately rather than hidden in one multiplier.
+For communication,
+\[
+\underbrace{T_{\text{message}}}_{\text{transfer time}}
+\approx
+\underbrace{\alpha}_{\text{startup / latency}}
++
+\frac{\overbrace{N_{\text{bytes}}}^{\text{payload}}}
+{\underbrace{B_{\text{effective}}}_{\text{achieved path bandwidth}}}.
+\]
+Tiny synchronising messages care strongly about $\alpha$; large transfers are dominated by achieved bandwidth and topology.
+
+\section{Software}
+\label{sec:hardware-api-stack}
+PyTorch, Triton, CUDA, CuTe, NCCL, and inference engines are not interchangeable APIs.
+They expose different control surfaces over the same computation, so the useful question is how low in the stack the bottleneck forces the implementation to go.
+
+\begin{table}[H]
+% TODO Reorder rows into depth order.
+\centering
+\footnotesize
+\caption{API layers expose different choices rather than competing at one level.}
+\label{tab:hardware-api-ladder}
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{2.55cm}>{\raggedright\arraybackslash}p{2.35cm}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}
+\toprule
+\textbf{Layer} & \textbf{Examples} & \textbf{What is described} & \textbf{Use when} \\
+\midrule
+Model / framework & PyTorch, JAX & tensor program and model semantics & model research; standard operators are sufficient \\
+Graph compiler & \shortstack[l]{\texttt{torch.compile},\\XLA} & graph capture, rewrites, fusion, lowering & Python/launch overhead or graph-level fusion matters \\
+Kernel DSL & Triton, Pallas & tiled program instances and memory movement & a custom kernel is needed without explicit CUDA thread mechanics \\
+CUDA C++ & CUDA & threads, blocks, memory, streams, synchronisation & precise NVIDIA control or unsupported patterns matter \\
+Layout / templates & CuTe, CUTLASS & tensor layouts, MMA tiles, staged pipelines & high-end tensor-core kernels and reusable GEMM structure \\
+Machine level & PTX / SASS & instructions and target execution & compiler backend, instruction-level debugging, extreme specialisation \\
+\shortstack[l]{Communication\\runtime} & NCCL, NVSHMEM, MPI, UCX, UCC & collectives or remote-memory operations & tensors span GPUs or nodes \\
+Serving engine & vLLM, SGLang, TensorRT-LLM, Dynamo & requests, KV state, batching, placement & end-to-end inference scheduling dominates \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  box/.style={draw, rounded corners=2pt, minimum height=7mm, text width=3.0cm, align=center},
+  arr/.style={-{Latex[length=2mm]}, thick}
+]
+\node[box] (py) {PyTorch / JAX\\tensor program};
+\node[box, below=3mm of py] (graph) {captured graph / IR\\guards + graph breaks};
+\node[box, below=3mm of graph] (lower) {pattern match + lower\\fusion / scheduling};
+\node[box, below=3mm of lower] (kernel) {Triton / CUDA / library\\target kernel};
+\node[box, below=3mm of kernel] (isa) {PTX / machine code\\SM execution};
+\draw[arr] (py) -- (graph);
+\draw[arr] (graph) -- (lower);
+\draw[arr] (lower) -- (kernel);
+\draw[arr] (kernel) -- (isa);
+\node[font=\scriptsize, align=left, right=8mm of graph] {graph level: remove boundaries\\and choose larger patterns};
+\node[font=\scriptsize, align=left, right=8mm of kernel] {kernel level: choose tiles, layouts,\\memory lifetime, synchronisation};
+\end{tikzpicture}
+\caption{Compilation progressively replaces model-level operations with more explicit scheduling, layout, memory, and target-specific execution choices.}
+\label{fig:compiler-lowering}
+\end{figure}
+
+\paragraph{CUDA}
+CUDA is for NVIDIA execution.
+The kernel author (you!) consider thread output ownership, which addresses it loads, whether those loads coalesce, which values are staged in registers or shared memory, which threads synchronise, and which stream carries the work.
+A stream is an ordered sequence of GPU work, but remember that independent streams can overlap.
+Events can express dependencies without forcing a global host/device synchronisation.
+
+\begin{lstlisting}[language=C++,caption={CUDA exposes thread ownership and launch geometry explicitly.}]
+__global__ void relu(float* y, const float* x, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) y[i] = max(x[i], 0.0f);
+}
+
+relu<<<grid, block, 0, stream>>>(y, x, n);
+\end{lstlisting}
+
+\paragraph{Triton}
+Triton raises the abstraction boundary by one layer by making the program own vector/tiles and compiling the vector operations onto threads.
+This does not remove the hardware constraints, and so poor tile geometry, layout, register pressure, or memory access still produces poor performance.
+
+\begin{lstlisting}[language=Python,caption={Triton exposes program instances, vector offsets, masks, and compile-time tile parameters.},label={lst:triton-kernel}]
+@triton.jit
+def relu_kernel(x, y, n: tl.constexpr, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offsets < n
+    values = tl.load(x + offsets, mask=mask)
+    tl.store(y + offsets, tl.maximum(values, 0.0), mask=mask)
+\end{lstlisting}
+
+\paragraph{CuTe and CUTLASS}
+CuTe makes tensor layout and thread/value mapping explicit through layout algebra, while CUTLASS provides composable high-performance building blocks for operations such as GEMM.
+They become useful when a kernel needs precise tensor-core tiling, staged asynchronous movement, and reusable architecture-specific structure without building the complete machinery from raw CUDA.
+
+
+\section{Kernels}
+\label{sec:hardware-kernels}
+A kernel is a GPU program implementing an operation or algorithm; the compiler turns that program into hardware instructions.
+
+You are instructing a soldier not to \textit{capture the bunker with a pincer movement}, you instead tell them \textit{walk 10m to the left, 20m forward, 5m right and fire to the right}. 
+
+\begin{table}[H]
+\centering
+\small
+\caption{Canonical kernels as hardware lessons rather than an algorithm catalogue.
+Transpose exposes layout and coalescing; reduction exposes cooperation and synchronisation; GEMM exposes reuse and tensor-core pipelines; attention combines matrix operations, reductions, and a large memory-lifetime problem.}
+\label{tab:kernel-patterns}
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{2.05cm}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}
+\toprule
+\textbf{Kernel} & \textbf{Mechanism to learn} & \textbf{Typical pressure} \\
+\midrule
+Transpose & remap layout while keeping global accesses coalesced & strided reads or writes; shared-memory bank conflicts \\
+Reduction & combine partial values through a tree/hierarchy & synchronisation and falling parallelism late in the reduction \\
+Scan & preserve ordered dependencies while parallelising chunks & work efficiency and inter-chunk coordination \\
+Online softmax & update stable statistics while streaming a row & extra global passes versus local reduction state \\
+GEMM & tile A/B, reuse them, feed tensor-core MMA pipelines & registers/shared memory, layout, pipeline depth, compute throughput \\
+Attention & compose tiled GEMM + softmax without full score materialisation & HBM traffic, sequence geometry, reduction state \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\paragraph{Fusion.}
+Imagine you have two parts of an invasion plan - one for beach landing and another for the inland push.
+Sharing a single unified (\textit{fused!}) plan at the start will reduce complexity and communication for the individual soldiers. 
+Obviously, this requires larger backpacks to store resources for a longer operation, but it reduces the downtime where the solders (threads) are waiting for instructions - a balance.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  box/.style={draw, rounded corners=2pt, minimum width=2.05cm, minimum height=7mm, align=center},
+  arr/.style={-{Latex[length=2mm]}, thick},
+  note/.style={font=\scriptsize, align=center}
+]
+\node[box] (a) {A, B};
+\node[box, right=7mm of a] (add) {add};
+\node[box, right=7mm of add] (tmp) {TEMP\\in HBM};
+\node[box, right=7mm of tmp] (relu) {ReLU};
+\node[box, right=7mm of relu] (out) {OUT\\in HBM};
+\draw[arr] (a) -- (add);
+\draw[arr] (add) -- (tmp);
+\draw[arr] (tmp) -- (relu);
+\draw[arr] (relu) -- (out);
+\node[note, below=5mm of tmp] {eager: extra write + read + launch};
+
+\node[box, below=19mm of a] (a2) {A, B};
+\node[box, right=12mm of a2, minimum width=4.0cm] (fused) {load $\rightarrow$ add $\rightarrow$ ReLU\\intermediate stays local};
+\node[box, right=12mm of fused] (out2) {OUT\\in HBM};
+\draw[arr] (a2) -- (fused);
+\draw[arr] (fused) -- (out2);
+\node[note, below=5mm of fused] {fused: fewer global round trips};
+\end{tikzpicture}
+\caption{Fusion removes an intermediate memory lifetime and a launch boundary. The trade-off is increased local register/shared-memory pressure and a larger kernel.}
+\label{fig:fusion}
+\end{figure}
+
+Fusion is not automatically beneficial.
+A larger fused kernel can use too many registers, lower occupancy, prevent a tuned library call, or couple operations whose best tile shapes disagree.
+
+
+\paragraph{GEMM (General Matrix Multiplication) and Tensor Cores}
+Matrix multiplication has unusually high reuse potential because one tile of $A$ contributes to many output columns and one tile of $B$ contributes to many output rows.
+\[
+    \text{HBM tiles}
+    &\rightarrow
+    \text{shared-memory tiles}
+    \rightarrow
+    \text{register fragments}
+    \rightarrow
+    \text{tensor-core MMA}
+    \rightarrow
+    \text{accumulators}
+    \rightarrow
+    \text{output tile}.
+\]
+
+
+\paragraph{Low Precision}
+Storing large data and models gets expensive and so researchers moved to storing the information in less precise ways, like 16-bit-floating-point, brain-floating-point, to pack more stuff into limited meory space.
+FP16/BF16, FP8 families, microscaling formats, and FP4-style formats can reduce bytes per value while enabling higher-throughput tensor-core paths.
+The gain appears twice: fewer bytes moved and more arithmetic completed per unit time.
+The cost is reduced numerical room plus scale metadata, calibration or dynamic scaling, outlier handling, conversion work, and dependence on a native hardware fast path.
+
+
+\section{Benchmarking and profiling}
+\label{sec:hardware-profiling}
+Evaluating your army is vital, and each layer needs evaluating in a different way.
+Performance work should move from end-to-end behaviour (general level tactics) to the deepest level (soldier fitness). 
+
+\begin{table}[H]
+\centering
+\small
+\caption{A profiling ladder from model-level behaviour to hardware cause.}
+\label{tab:profiling-ladder}
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{2.75cm}>{\raggedright\arraybackslash}p{3.0cm}>{\raggedright\arraybackslash}X@{}}
+\toprule
+\textbf{Tool / level} & \textbf{Question} & \textbf{Typical evidence} \\
+\midrule
+End-to-end benchmark & Wrong product metric? & step time, tokens/s, p50/p99 latency, scaling efficiency \\
+PyTorch profiler & Which operation added cost? & operators, shapes, CPU/GPU activity, memory, communication \\
+Nsight Systems & What ran, what waited? & CPU/CUDA timeline, streams, launch gaps, NCCL, copies, overlap \\
+Nsight Compute & Why is this hot kernel slow? & memory throughput, cache, occupancy limits, warp stalls, tensor-core use, roofline \\
+Fabric microbenchmarks & Is the physical path healthy? & point-to-point/collective latency and achieved bandwidth by topology \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+
+\section{Multi-GPU}
+\label{sec:hardware-multigpu}
+In practice, your army will work as part of a campaign with other armies. 
+How do you talk to them efficiently?
+
+Once tensors span accelerators, the physical graph of links becomes part of the algorithm.
+External transfers (NVLink/NVSwitch) cost more than internal ones (PCIe, NIC) and so we need to carefully design algorithms to exploit speed in the correct places.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  gpu/.style={draw, rounded corners=2pt, minimum width=2.0cm, minimum height=8mm, align=center},
+  nic/.style={draw, rounded corners=2pt, minimum width=1.7cm, minimum height=7mm, align=center},
+  arr/.style={thick},
+  net/.style={double, double distance=1.2pt, thick}
+]
+\node[gpu] (g0) {GPU 0};
+\node[gpu, right=7mm of g0] (g1) {GPU 1};
+\node[nic, below=9mm of $(g0)!0.5!(g1)$] (n0) {NIC 0};
+\draw[arr] (g0) -- node[above,font=\scriptsize]{NVLink / NVSwitch} (g1);
+\draw[arr] (g0) -- (n0);
+\draw[arr] (g1) -- (n0);
+\node[draw, rounded corners=2pt, fit=(g0)(g1)(n0), inner sep=5mm, label={[font=\small]above:node 0}] {};
+
+\node[gpu, right=32mm of g1] (g2) {GPU 2};
+\node[gpu, right=7mm of g2] (g3) {GPU 3};
+\node[nic, below=9mm of $(g2)!0.5!(g3)$] (n1) {NIC 1};
+\draw[arr] (g2) -- node[above,font=\scriptsize]{NVLink / NVSwitch} (g3);
+\draw[arr] (g2) -- (n1);
+\draw[arr] (g3) -- (n1);
+\node[draw, rounded corners=2pt, fit=(g2)(g3)(n1), inner sep=5mm, label={[font=\small]above:node 1}] {};
+\draw[net] (n0.east) -- node[above,font=\scriptsize]{InfiniBand / RoCE / Ethernet} (n1.west);
+\node[font=\scriptsize, align=center, below=7mm of $(n0)!0.5!(n1)$] {GPUDirect RDMA can move GPU memory through the NIC\\without staging the payload through ordinary host copies};
+\end{tikzpicture}
+\caption{A logical GPU group sits on heterogeneous links. Rank placement and collective hierarchy should match this topology rather than treating every pair as equivalent.}
+\label{fig:multigpu-topology}
+\end{figure}
+
+
+\paragraph{Collectives}
+Collectives are communication algorithms we can call atomically.
+The main operations and their natural ML uses are compared below.
+
+\begin{table}[H]
+\centering
+\small
+\caption{Collective communication patterns.}
+\label{tab:collectives}
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{2.25cm}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}
+\toprule
+\textbf{Operation} & \textbf{Data movement} & \textbf{Typical ML role} \\
+\midrule
+Broadcast & one rank sends the same data to the group & initial state / control / parameter distribution \\
+Reduce & combine values onto one rank & aggregation when only one consumer needs the result \\
+All-reduce & combine, then give the result to every rank & replicated data-parallel gradient synchronisation \\
+All-gather & every rank receives every shard & reconstruct sharded activations or parameters \\
+Reduce-scatter & reduce, then leave one output shard per rank & sharded gradients/activations; pairs naturally with all-gather \\
+All-to-all & each rank sends a different partition to every rank & MoE token dispatch/combine \\
+Send / recv & explicit point-to-point exchange & pipeline stage boundaries and specialised transfers \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\paragraph{Ring versus Tree}
+Rings pass messages in sequence from neighbour to neighbour, while a tree uses hierarchies. 
+Rings grow linearly while trees grow log-wise.
+
+\subsection{Communication Interfaces}
+\label{sec:hardware-communication-runtimes}
+Communication software separates \textbf{what operation is required} from \textbf{which physical transport should carry it}.
+This separation is why application code can express an all-reduce while a runtime chooses NVLink, PCIe, InfiniBand, RoCE, or another available path.
+
+\paragraph{Two-Sided versus One-Sided}
+Two-sided communication coordinates both endpoints: a send is matched by a receive, or all ranks enter a collective.
+One-sided communication lets the initiator name a remote memory operation such as put, get, or atomic without requiring the remote application thread to issue a matching receive at that moment.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  box/.style={draw, rounded corners=2pt, minimum width=3.0cm, minimum height=8mm, align=center},
+  arr/.style={-{Latex[length=2mm]}, thick}
+]
+\node[box] (a) at (0,0) {GPU A\\\texttt{send(buffer)}};
+\node[box] (b) at (8.2,0) {GPU B\\\texttt{recv(buffer)}};
+\draw[arr] (a) -- node[above,font=\scriptsize,align=center]{two-sided\\both endpoints participate} (b);
+
+\node[box] (a2) at (0,-2.0) {GPU A\\\texttt{put(remote, data)}};
+\node[box] (b2) at (8.2,-2.0) {GPU B\\symmetric / remote memory};
+\draw[arr] (a2) -- node[above,font=\scriptsize,align=center]{one-sided\\initiator names remote state} (b2);
+\node[font=\scriptsize, align=center] at (4.1,-2.95) {completion and ordering are still required};
+\end{tikzpicture}
+\caption{Two-sided communication coordinates operations at both endpoints; one-sided communication exposes remotely addressable state to the initiator.}
+\label{fig:one-two-sided}
+\end{figure}
+
+\paragraph{Hardware}
+
+\textbf{RDMA} (Remote Direct Access Memory) lets a network adapter transfer registered memory with little ordinary CPU copying or intervention.
+GPUDirect RDMA extends this path to GPU memory so a NIC can move data between accelerator memory and the network without staging the payload through CPU memory.
+
+
+Connections between GPUs exist in two ways.
+\begin{itemize}
+    \item \textbf{Within a Node:} Communication within the same server (node). 
+    This occurs when GPUs installed on the same motherboard or baseboard share data locally, utilising ultra-high-bandwidth interconnects like 
+    \begin{itemize}
+        \item \textbf{NVLink:} Bi-directional interconnect developed by NVIDIA providing direct GPU-to-GPU communication at speeds significantly faster than traditional PCIe, bypassing the CPU to drastically reduce latency.
+        \item \textbf{NVSwitch:} A physical routing chip that extends NVLink connectivity beyond direct point-to-point pairs. 
+        It acts as an on-board high-speed switch, allowing all GPUs within a node to communicate simultaneously at NVLink bandwidth, effectively creating a single monolithic virtual GPU pool.
+        \item \textbf{PCIe (Peripheral Component Interconnect Express):} The standard system bus interface used to connect GPUs to the CPU and system memory. 
+        While it features lower bandwidth and higher latency than NVLink, it serves as the universal hardware baseline across all hardware configurations.
+    \end{itemize}
+    \item \textbf{Between Nodes:} Communication between different servers (nodes) in a network. 
+    This occurs when GPUs housed in separate physical chassis need to share data, typically utilising high-speed networking technologies like:
+    \begin{itemize}
+        \item \textbf{InfiniBand:} Interconnect with RDMA semantics. Example: \textit{Quantum-X}.
+        \item \textbf{RoCE (RDMA over Converged Ethernet):} Use an ethernet connection between nodes using a Network Interface Card (\textbf{NIC}) which is kind of like a driver. 
+        Exposes local RDMA to global GPU network. Example: \textit{Spectrum-X}.
+    \end{itemize}
+\end{itemize}
+
+\paragraph{Software}
+We have different layers of software available:
+\begin{itemize}
+    \item \textbf{NCCL} (pronounced \textit{nickel}) is your high level communication software, it exposes collectives in code as functions (e.g. \textsc{collective(tensor)}) and abstracts away the specific point-to-point communication. 
+    In python language, this is what SciPy is to numpy - if you want a common solution, use NCCL.
+    \item \textbf{NVSHMEM} is NVIDIA’s parallel programming library that implements an OpenSHMEM-based Partitioned Global Address Space (PGAS) across a cluster of GPUs. 
+    In python language, this is what numpy is to SciPy - if you want a custom solution, use NVSHMEM.
+    \item \textbf{MPI} is a broad message-passing programming model used throughout HPC.
+    \item \textbf{UCX} is a lower communication layer that selects and drives transports, while \textbf{UCC} provides collective operations over underlying communication mechanisms.
+\end{itemize}
+
+
+\section{Distributed Training}
+\label{sec:hardware-parallelism}
+Some training bottlenecks may be solved by using many GPUs in parallel, for example if datasets can be sharded/partitioned then we may train duplicates of the model independently and synchronise them later - this is \textit{Data Parallel} training.
+
+\begin{table}[H]
+\centering
+\footnotesize
+\caption{Training parallelisms as resource/communication trade-offs.}
+\label{tab:parallelisms}
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{2.15cm}>{\raggedright\arraybackslash}p{2.15cm}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}
+\toprule
+\textbf{Parallelism} & \textbf{Partition} & \textbf{New communication} & \textbf{Use when} \\
+\midrule
+Data parallel (DP) & data & gradient / parameter-state synchronisation & model fits per worker; more throughput is needed \\
+Tensor parallel (TP) & tensor dimensions inside layers & frequent all-reduce, all-gather, reduce-scatter & a layer/model must be split and fast links are available \\
+Pipeline parallel (PP) & layer depth (stages) & activations and gradients across stage boundaries & model state must be split by depth \\
+Context parallel (CP) & sequence or context dimension & attention and KV exchange & long sequences dominate activation/state memory \\
+Expert parallel (EP) & MoE experts & all-to-all token dispatch and combine & sparse expert capacity spans devices \\
+ZeRO or FSDP-style & parameters, gradients, optimiser state & state gather/scatter around use/update & replicated training state consumes too much memory \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+
+\begin{calloutmemoryhook}
+Parallelism turns a resource bottleneck into a communication pattern.
+\end{calloutmemoryhook}
+
+
+
+\section{Practical Diagnostic Process}
+\label{sec:hardware-diagnostic}
+We prefer to diagnose from wall-clock symptoms rather than jumping blindly to a solution.
+
+
+\begin{figure}[H]
+\centering
+\resizebox{0.98\textwidth}{!}{%
+\begin{tikzpicture}[
+  node distance=7mm and 8mm,
+  q/.style={draw, rounded corners=2pt, text width=3.25cm, align=center, minimum height=8mm},
+  a/.style={draw, rounded corners=2pt, text width=3.5cm, align=center, minimum height=8mm, fill=black!3},
+  arr/.style={-{Latex[length=2mm]}, thick},
+  edge/.style={font=\scriptsize, fill=white, inner sep=1pt}
+]
+\node[q] (slow) {end-to-end too slow?};
+\node[q, below left=10mm and 23mm of slow] (idle) {GPU mostly idle?};
+\node[q, below right=10mm and 23mm of slow] (busy) {GPU busy?};
+\draw[arr] (slow) -- (idle);
+\draw[arr] (slow) -- (busy);
+
+\node[a, below=of idle] (host) {timeline: CPU/input/queue, launch gaps, graph breaks, or communication waits};
+\draw[arr] (idle) -- (host);
+\node[a, below=of host] (hostfix) {fix feeding, dispatch, graph boundary, or communication schedule};
+\draw[arr] (host) -- (hostfix);
+
+\node[q, below=of busy] (hot) {one/few kernels dominate?};
+\draw[arr] (busy) -- (hot);
+\node[a, below left=8mm and 14mm of hot] (kernel) {Nsight Compute: memory-bound, compute-bound, or resource/dependency stalls};
+\node[a, below right=8mm and 14mm of hot] (many) {many short kernels: fusion, compiler scheduling, CUDA graphs};
+\draw[arr] (hot) -- node[edge,left]{yes} (kernel);
+\draw[arr] (hot) -- node[edge,right]{no} (many);
+
+\node[q, below=24mm of $(hostfix)!0.5!(kernel)$] (scale) {distributed scaling poor?};
+\node[a, below=of scale, text width=7.6cm] (dist) {check expected bytes $\rightarrow$ achieved link bandwidth $\rightarrow$ topology/rank placement $\rightarrow$ serialised collectives $\rightarrow$ imbalance/stragglers $\rightarrow$ recovery behaviour};
+\draw[arr] (hostfix.south) |- (scale.west);
+\draw[arr] (kernel.south) |- (scale.east);
+\draw[arr] (many.south) |- (scale.east);
+\draw[arr] (scale) -- (dist);
+\end{tikzpicture}%
+}
+\caption{Minimal performance diagnostic. The branch selects the next measurement; it does not prescribe an optimisation before the limiting resource is known.}
+\label{fig:hardware-diagnostic}
+\end{figure}

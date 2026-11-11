@@ -1,0 +1,227 @@
+\chapter{Foundations: Mathematics}
+\label{chap:foundations}
+
+\section{Linear maps, directions and information}
+\label{sec:foundations-linear-maps-directions-and-information}
+\label{sec:la-vector-geometry-and-linear-independence}
+\label{sec:la-matrices-as-linear-transformations}
+
+For ML, the useful geometric question is usually not ``what is a vector?'' but ``which directions contain distinct information, and what does a transformation preserve or destroy?''
+For nonzero vectors, the dot product separates magnitude from directional alignment:
+\[
+\underbrace{x^\top y}_{\text{magnitude + alignment}}
+=
+\|x\|\,\|y\|\underbrace{\cos\phi}_{\text{directional alignment}},
+\qquad
+x\perp y\iff x^\top y=0.
+\]
+Cosine similarity removes magnitude; the raw dot product does not.
+This distinction matters in embeddings and similarity search when vector norm may or may not carry task information.
+\label{subsec:la-dot-product}
+\label{subsec:la-orthogonality}
+
+
+\subsection{Independence, span, rank and null space}
+\label{subsec:la-linear-independence}
+\label{subsec:la-span-and-rank}
+\label{subsec:la-image-space-and-null-space}
+\label{subsec:la-singular-matrices}
+
+\textbf{Linear independence} means a direction cannot be reconstructed from the others; the \textbf{span} is everything their combinations can represent; \textbf{rank} counts independent surviving directions.
+For a linear map $y=Ax$, rank--nullity gives the information-capacity picture directly:
+\begin{equation}
+    \underbrace{N_{\text{input dimensions}}}_{\text{available directions}}
+    =
+    \underbrace{\operatorname{rank}(A)}_{\text{directions that survive}}
+    +
+    \underbrace{\dim\ker(A)}_{\text{directions destroyed}}
+.
+\end{equation}
+The image/column space is what the map can output; the null space contains input perturbations that become invisible.
+Redundant features and low-rank parameterisations are both statements about how many independent directions are actually needed.
+This is the prerequisite for PCA in \cref{sec:representation-pca-an-eigenvector-view} and LoRA in \cref{sec:adaptation-lora-a-parameter-efficient-adaptation-mechanism}.
+
+\begin{calloutmemoryhook}
+Rank counts independent directions (columns of matrix); the null space counts directions the map deletes.
+\end{calloutmemoryhook}
+
+An inverse exists only when a square linear map loses no direction and covers its output space.
+In numerical ML code, solve a linear system or use a factorisation rather than explicitly forming $A^{-1}$ unless the inverse itself is required.
+\label{subsec:la-inverse-of-a-matrix}
+\label{subsec:la-determinant}
+
+\section{Eigenstructure and low-rank structure}
+\label{sec:foundations-eigenstructure-and-low-rank-structure}
+\label{sec:la-eigenstructure-and-matrix-properties}
+
+\subsection{Eigenvectors, eigenvalues and PSD structure}
+\label{subsec:la-eigenvectors-and-eigenvalues}
+\label{subsec:la-positive-semi-definite-psd-matrices}
+
+An eigenvector is a direction a linear map does not rotate away from itself:
+\[
+A\underbrace{v}_{\text{preserved direction}}
+=
+\underbrace{\lambda_{\text{along }v}}_{\text{scale on that direction}}v.
+\]
+The same mental model appears in covariance/PCA, recurrent dynamics and curvature: eigenvectors identify special directions; eigenvalues say how strongly the operator acts along them.
+PCA uses covariance eigenstructure explicitly in \cref{sec:representation-pca-an-eigenvector-view}; the optimisation consequence reappears with Hessian curvature in \cref{sec:optimisation-newton-s-method-and-other-second-order-methods}.
+
+A symmetric matrix is positive semidefinite (PSD) when
+\[
+\underbrace{x^\top A x}_{\text{quadratic response along }x}\ge 0\qquad\text{for every }x.
+\]
+For symmetric $A$, this is equivalent to nonnegative eigenvalues.
+Covariance matrices are PSD.
+\begin{calloutmemoryhook}
+A PSD Hessian means convex space.
+\end{calloutmemoryhook}
+
+\subsection{SVD as the rectangular low-rank view}
+\label{subsec:foundations-svd}
+
+For a rectangular matrix, singular value decomposition exposes the same directional story without requiring a square matrix:
+\[
+A
+=
+\underbrace{U}_{\text{output directions}}
+\underbrace{\Sigma}_{\text{direction-wise scales}}
+\underbrace{V^\top}_{\text{input directions}}.
+\]
+Large singular values identify directions the map transmits strongly; truncating small ones gives a low-rank approximation.
+That is the common structural idea behind compression, PCA implementations and parameter-efficient low-rank updates such as LoRA (\cref{sec:adaptation-lora-a-parameter-efficient-adaptation-mechanism}).
+
+\section{Probability, uncertainty and estimation}
+\label{sec:foundations-pmfs-and-pdfs}
+
+For a discrete random variable, a PMF assigns probability mass and sums to one; for a continuous variable, a PDF integrates to one and probabilities are areas under the density.
+Conditional and joint distributions connect through $p(x,y)=p(y\mid x)p(x)$; marginalisation removes variables by summing or integrating them out.
+
+\subsection{Expectation, variance and covariance}
+\label{sec:foundations-expectation-variance-and-covariance}
+
+Expectation is the distribution-weighted average.
+Variance and covariance capture spread and linear co-variation:
+\begin{align}
+\Var(X)
+&=\E\!\left[(X-\E[X])^2\right],\\
+\Cov(X,Y)
+&=\E\!\left[(X-\E[X])(Y-\E[Y])\right],\\
+\rho_{XY}
+&=\frac{\Cov(X,Y)}{\sqrt{\Var(X)\Var(Y)}}.
+\end{align}
+Zero covariance is weaker than independence; independence implies zero covariance when the relevant moments exist.
+For vector-valued data, the covariance matrix $\Sigma=\E[(x-\E[x])(x-\E[x])^\top]$ packages pairwise linear co-variation and feeds directly into PCA/whitening in \cref{sec:representation-pca-an-eigenvector-view,sec:representation-whitening-pca-and-zca}.
+
+
+\subsection{Bayes, likelihood and priors}
+\label{sec:foundations-bayes-theorem}
+
+\begin{calloutmemorise}
+\[
+\boxed{P(A\mid B)=\frac{P(B\mid A)P(A)}{P(B)}}.
+\]
+\end{calloutmemorise}
+Bayes' rule says a posterior combines prior belief with how compatible the observation is under each hypothesis.
+For rare events, the prior/base rate can dominate the interpretation of a positive test; this is the probability-side version of precision in \cref{sec:evaluation-precision-recall-and-f1}.
+
+\begin{calloutexample}
+If prevalence is $1\%$, sensitivity is $95\%$, and the false-positive rate is $5\%$, then $P(\text{fault}\mid +)\approx16\%$: a sensitive detector can still produce mostly false alarms when the event is rare.
+\end{calloutexample}
+
+\label{sec:foundations-maximum-likelihood-and-maximum-a-posteriori-estimation}
+For $N_{\text{examples}}$ conditionally independent observations, maximum likelihood chooses parameters that maximise summed log-likelihood:
+\[
+\hat\theta_{\mathrm{MLE}}
+=
+\argmax_{\theta}\sum_{i=1}^{N_{\text{examples}}}\log p(x_i\mid\theta).
+\]
+MAP adds a prior preference directly to the same objective:
+\[
+\hat\theta_{\mathrm{MAP}}
+=
+\argmax_{\theta}
+\left[
+\underbrace{\log p(D\mid\theta)}_{\text{fit to observations}}
++
+\underbrace{\log p(\theta)}_{\text{parameter preference}}
+\right].
+\]
+Gaussian-like priors produce L2-style penalties; Laplace-like priors produce L1-style penalties, linking Bayesian preference to regularisation in \cref{sec:stability-regularisation-l1-and-l2} and inductive bias in \cref{sec:nfl-bayesian-priors-a-direct-form-of-inductive-bias}.
+
+\subsection{Entropy and distribution mismatch}
+\label{sec:foundations-entropy}
+
+\begin{calloutmemorise}
+\[
+\boxed{H(X)=-\sum_x p(x)\log p(x)}.
+\]
+\end{calloutmemorise}
+Entropy measures uncertainty in one distribution.
+Cross-entropy measures coding/surprise when observations follow $p$ but predictions use $q$; KL is the extra cost relative to using $p$ itself:
+\label{sec:foundations-cross-entropy-kl-divergence-and-jensen-shannon-divergence}
+\[
+\underbrace{H(p,q)}_{\text{cross-entropy}}
+=
+\underbrace{H(p)}_{\text{irreducible uncertainty}}
++
+\underbrace{D_{\mathrm{KL}}(p\|q)}_{\text{mismatch penalty}}.
+\]
+KL is asymmetric and can be infinite when $q$ assigns zero probability where $p$ does not.
+Jensen--Shannon divergence symmetrises this comparison through the mixture $(p+q)/2$ and is bounded.
+Cross-entropy becomes a classification objective in \cref{sec:objectives-classification-losses-and-logits}; entropy reduction also drives common tree-split criteria in \cref{subsec:trees-learning-a-split}.
+
+\section{Local Derivatives and Curvature}
+\label{sec:la-multivariable-calculus-and-optimisation}
+
+\subsection{Jacobian: local input-to-output sensitivity}
+\label{subsec:la-jacobian}
+
+For a vector-valued map $f:x\mapsto y$, the local first-order response is
+\[
+\Delta y
+\approx
+\underbrace{\frac{\partial y}{\partial x}}_{\text{Jacobian: local sensitivity map}}\Delta x.
+\]
+The Jacobian tells which input directions are amplified, suppressed or locally invisible; its products are the algebra underneath backpropagation and recurrent gradient propagation.
+See \cref{sec:optimisation-backpropagation-how-gradients-are-calculated,sec:stability-weight-initialisation-start-in-a-trainable-region} for those consequences rather than reteaching them here.
+
+\begin{calloutmemoryhook}
+The Jacobian maps a small input perturbation to its first-order output perturbation.
+\end{calloutmemoryhook}
+
+\subsection{Hessian: local curvature of a scalar objective}
+\label{subsec:la-hessian}
+
+For a scalar loss, the second derivative matrix controls the local quadratic correction:
+\[
+\mathcal L(\theta+\Delta)
+\approx
+\mathcal L(\theta)
++
+\nabla_\theta\mathcal L(\theta)^\top\Delta
++
+\frac12\Delta^\top
+\underbrace{\nabla_\theta^2\mathcal L(\theta)}_{\text{Hessian: local curvature}}\Delta.
+\]
+Large positive Hessian eigenvalues mean sharp positive curvature; small magnitudes mean flat directions; negative eigenvalues identify locally downhill curvature directions around a saddle/non-minimum.
+Newton and curvature-aware methods use this structure in \cref{sec:optimisation-newton-s-method-and-other-second-order-methods}.
+
+\subsection{Convexity}
+\label{sec:foundations-convexity-and-why-it-matters-for-optimisation}
+
+A convex objective has no suboptimal local minima: averaging two parameter points cannot raise the function above the corresponding average of their objective values.
+For twice-differentiable objectives on a convex domain, a PSD Hessian everywhere is the useful local test.
+Deep-network losses are generally nonconvex, so convex guarantees do not transfer automatically.
+
+\section{Confidence intervals and standard error}
+\label{sec:foundations-confidence-intervals}
+
+For $N_{\text{independent observations}}$ with sample standard deviation $s$, the mean estimator has standard error
+\[
+\operatorname{SE}(\hat\mu)=\frac{s}{\sqrt{N_{\text{independent observations}}}}.
+\]
+A confidence interval is a sampling-procedure statement, not a posterior probability that the fixed parameter lies in the realised interval.
+Use a Student-$t$ critical value for normally distributed observations with unknown variance and small samples; use resampling or a model matched to the dependence structure when independence is not credible.
+Evaluation-specific consequences are revisited in \cref{sec:evaluation-cross-validation-and-fold-choice,sec:evaluation-model-selection-and-data-leakage}.
+

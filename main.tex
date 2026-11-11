@@ -1,0 +1,152 @@
+\documentclass[10pt,a4paper,oneside,openany]{book}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{geometry}
+\geometry{top=19mm,bottom=21mm,left=23mm,right=22mm,headheight=23pt}
+\usepackage{xcolor,graphicx,amsmath,amssymb,amsthm,mathtools}
+\usepackage{booktabs,tabularx,longtable,array,multirow}
+\usepackage{enumitem,parskip}
+\usepackage[most]{tcolorbox}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,shapes.misc,fit,calc,backgrounds,matrix,decorations.pathreplacing}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepackage{titlesec,fancyhdr,lastpage}
+\usepackage{float,caption,subcaption}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage[capitalise,noabbrev]{cleveref}
+\crefname{chapter}{section}{sections}
+\Crefname{chapter}{Section}{Sections}
+\usepackage{needspace}
+\usepackage{multicol}
+\definecolor{navy}{HTML}{14243B}
+\definecolor{deepblue}{HTML}{20558A}
+\definecolor{teal}{HTML}{138F82}
+\definecolor{amber}{HTML}{BB772D}
+\definecolor{palerblue}{HTML}{EAF2F8}
+\definecolor{palerteal}{HTML}{EAF6F4}
+\definecolor{paleamber}{HTML}{FBF2E5}
+\definecolor{slate}{HTML}{4D6176}
+\definecolor{rulegray}{HTML}{D5DEE7}
+\definecolor{calloutpink}{HTML}{D96C9F}
+\definecolor{calloutpinkbg}{HTML}{FBEAF2}
+\definecolor{calloutpurple}{HTML}{7B61A8}
+\definecolor{calloutpurplebg}{HTML}{F1ECF8}
+\definecolor{calloutred}{HTML}{B84A4A}
+\definecolor{calloutredbg}{HTML}{FAEAEA}
+\definecolor{calloutgray}{HTML}{6F7780}
+\definecolor{calloutgraybg}{HTML}{F1F3F5}
+\hypersetup{colorlinks=true,linkcolor=deepblue,urlcolor=teal,citecolor=teal,pdftitle={Machine Learning Foundations},pdfauthor={Prepared for the reader},pdfsubject={Integrated machine learning foundation notes}}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{3.5pt plus .7pt minus .4pt}
+\setlist[itemize]{topsep=3pt,itemsep=2pt,leftmargin=1.65em}
+\setlist[enumerate]{topsep=3pt,itemsep=2pt,leftmargin=1.8em}
+\renewcommand{\arraystretch}{1.2}
+\captionsetup{font=small,labelfont={bf,color=navy}}
+\titleformat{\chapter}[display]{\normalfont}{\Large\bfseries\color{teal}SECTION \thechapter}{8pt}{\Huge\bfseries\color{navy}}[\vspace{3pt}\titlerule]
+\titlespacing*{\chapter}{0pt}{-7pt}{13pt}
+\titleformat{\section}{\Large\bfseries\color{deepblue}}{\thesection}{.7em}{}
+\titleformat{\subsection}{\large\bfseries\color{navy}}{\thesubsection}{.7em}{}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\color{slate}MACHINE LEARNING \textbar\ LESSON NOTES}
+\fancyhead[R]{\small\color{slate}\nouppercase{\leftmark}}
+\renewcommand{\chaptermark}[1]{\markboth{Section \thechapter: #1}{}}
+\fancyfoot[C]{\small\color{slate}\thepage\ / \pageref{LastPage}}
+\renewcommand{\headrulewidth}{.3pt}
+\renewcommand{\headrule}{\hbox to\headwidth{\color{rulegray}\leaders\hrule height \headrulewidth\hfill}}
+\newtcolorbox{calloutexample}[1][]{enhanced,breakable,colback=calloutpinkbg,colframe=calloutpink,boxrule=.6pt,arc=2mm,left=3mm,right=3mm,top=2mm,bottom=2mm,title={\bfseries Example},fonttitle=\color{white},colbacktitle=calloutpink,#1}
+\newtcolorbox{calloutpractical}[1][]{enhanced,breakable,colback=calloutpurplebg,colframe=calloutpurple,boxrule=.6pt,arc=2mm,left=3mm,right=3mm,top=2mm,bottom=2mm,title={\bfseries Practical Tip},fonttitle=\color{white},colbacktitle=calloutpurple,#1}
+\newtcolorbox{calloutmemorise}[1][]{enhanced,breakable,colback=calloutredbg,colframe=calloutred,boxrule=.6pt,arc=2mm,left=3mm,right=3mm,top=2mm,bottom=2mm,title={\bfseries Memorise},fonttitle=\color{white},colbacktitle=calloutred,#1}
+\newtcolorbox{calloutintuition}[1][]{enhanced,breakable,colback=calloutgraybg,colframe=calloutgray,boxrule=.6pt,arc=2mm,left=3mm,right=3mm,top=2mm,bottom=2mm,title={\bfseries Intuition},fonttitle=\color{white},colbacktitle=calloutgray,#1}
+\newtcolorbox{calloutbias}[1][]{enhanced,breakable,colback=white,colframe=teal,boxrule=.7pt,arc=2mm,left=3mm,right=3mm,top=2mm,bottom=2mm,title={\bfseries Inductive Bias},fonttitle=\color{white},colbacktitle=teal,#1}
+\newcommand{\term}[1]{\textbf{\color{navy}#1}}
+\newcommand{\figpdf}[3][.89\textwidth]{\begin{figure}[htbp]\centering\includegraphics[width=#1]{figures/#2.pdf}\caption{#3}\label{fig:#2}\end{figure}}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\R}{\mathbb R}
+\newcommand{\E}{\mathbb E}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\Cov}{\operatorname{Cov}}
+\newcommand{\KL}{D_{\mathrm{KL}}}
+\newcommand{\sgn}{\operatorname{sgn}}
+\newcommand{\softmax}{\operatorname{softmax}}
+\newcommand{\argmin}{\operatorname*{arg\,min}}
+\newcommand{\argmax}{\operatorname*{arg\,max}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\tikzset{flow/.style={draw=deepblue,fill=palerblue,rounded corners=3pt,align=center,font=\small,inner sep=6pt,minimum height=10mm},
+ yesbox/.style={draw=teal,fill=palerteal,rounded corners=3pt,align=center,font=\footnotesize,inner sep=5pt},
+ decisionnode/.style={diamond,draw=amber,fill=paleamber,aspect=2.0,align=center,font=\small,inner sep=1pt},
+ arr/.style={-{Stealth[length=2.5mm]},thick,draw=slate},
+ arrblue/.style={-{Stealth[length=2.5mm]},thick,draw=deepblue}}
+\lstdefinestyle{pythonsmall}{language=Python,basicstyle=\small\ttfamily,breaklines=true,keywordstyle=\color{deepblue}\bfseries,stringstyle=\color{teal},commentstyle=\color{slate},showstringspaces=false,backgroundcolor=\color{palerblue},frame=single,rulecolor=\color{rulegray},columns=fullflexible,keepspaces=true,aboveskip=6pt,belowskip=6pt}
+\lstset{style=pythonsmall}
+
+
+
+% Token
+
+% Token formatting -- compatible with Overleaf's default pdfLaTeX
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath}
+% Literal token spellings, including underscores, pipes and brackets
+\DeclareRobustCommand{\tok}[1]{%
+    \begingroup
+    \ttfamily
+    \detokenize{#1}%
+    \endgroup
+}
+% Visible ASCII substitutes for Unicode whitespace markers
+% GPT-2/RoBERTa: Ġ (U+0120)
+\newcommand{\gspace}{\texttt{[SP]}}
+% SentencePiece: ▁ (U+2581)
+\newcommand{\spmspace}{\texttt{[SPM]}}
+
+
+
+\begin{document}
+
+\input{sections/cover}
+
+\frontmatter
+\hypersetup{pageanchor=true}
+\tableofcontents
+\include{sections/00_initial_commentary}
+\mainmatter
+\include{sections/foundations_math}
+\include{sections/data_systems}
+\include{sections/foundations_hardware}
+\include{sections/paradigms}
+
+\include{sections/data_preprocessing}
+\include{sections/data_representation}
+
+\include{sections/models}
+\include{sections/optimisation}
+\include{sections/stability}
+\include{sections/evaluation}
+\include{sections/adaptation}
+
+\include{sections/arch_clustering}
+\include{sections/arch_trees}
+\include{sections/arch_cnn}
+\include{sections/arch_transformers}
+\include{sections/arch_gnn}
+\include{sections/arch_generative_modelling}
+\include{sections/arch_rl}
+% \include{sections/transformers}
+%\include{sections/modern_llm_architecture_scaling_training}
+%\include{sections/llms}
+
+\include{sections/inference}
+\include{sections/systems}
+\include{sections/software}
+
+\include{sections/usecases}
+
+\include{sections/InterviewQuestions}
+\end{document}

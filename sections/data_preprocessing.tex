@@ -1,0 +1,136 @@
+\chapter{Data: Preprocessing}
+\label{chap:representation}
+
+\section{Curse of Dimensionality}
+\label{sec:representation-the-curse-of-dimensionality}
+Input data vector spaces grow in size far more than the actual data space.
+For example if one drew a map of the world in 2D there woudl be an extremely expressive dataset.
+Adding a height dimension to make a 3D map introduces another infinite dimension.
+However, this height dimension is \textit{not} fully explored by the data (buildings are only O(10m) tall, planes fly only O(10km) high, \dots) and so there exists a large empty region in our 3D map that goes off to infinity.
+This means that all map elements are somewhat close to each other in the height dimension, which obscures many comparisons, like distance metrics.
+
+A simple grid picture makes the scaling really clear, where $N_{\text{points per axis}}^{N_{\text{features}}}$ samples are needed to fill every grid location.
+
+\figpdf[.78\textwidth]{curse_distance}{For one synthetic sample, nearest and farthest distances become less distinguishable as dimension increases.
+This illustrates distance concentration rather than asserting a universal law.}
+
+\section{Standardisation}
+\label{sec:representation-scaling-standardisation-and-leakage}
+\textbf{Standardisation} is the coordinate-wise transform
+\[
+    x^{\text{standardised}}_j =
+    \frac{
+    x_j-\mu_j
+    }{
+    \sigma_{j}
+    }.
+\]
+It equalises scale but does not remove correlations.
+It is also known as the \textit{Z-Score}.
+Alternatives include:
+min--max scaling:
+\[
+    x^{\text{minmax}}_j = \frac{x - x_{\text{min}}}{x_{\text{max}} - x_{\text{min}}},
+\]
+robust median/quantile scaling:
+\[
+    x^{\text{quintile}}_j = \frac{x - \text{median}(x)}{\text{IQR}(x)},
+\]
+or a physical unit conversion.
+
+
+\section{Dimensionality Reduction}
+\label{sec:representation-dimensionality-reduction-selection-versus-transformation}
+\textbf{Feature selection} keeps original variables; \textbf{feature extraction} creates new coordinates.
+Selection usually preserves interpretation; extraction can compress correlated structure more efficiently.
+L1 regularisation gives a model-based route to sparse selection in settings where individual parameter weights map meaningfully to input features (\cref{sec:stability-regularisation-l1-and-l2}).
+
+\begin{tabularx}{\linewidth}{@{}L{.20\linewidth}YY@{}}
+    \toprule
+    Method & What it preserves & Main caution \\
+    \midrule
+    Filter / wrapper selection & Original variables chosen by a criterion & Selection must occur inside CV \\
+    PCA & High-variance linear directions & Variance need not predict labels \\
+    Autoencoder & Information useful for reconstruction & Reconstruction need not preserve task signal \\
+    t-SNE / UMAP & Local neighbourhood structure for visualisation & Global geometry can be distorted \\
+    \bottomrule
+\end{tabularx}
+
+
+\paragraph{Distance In High Dimensions is Useless}
+In high dimensions distances can become less discriminative. 
+As dimensions increase, the dot product between two vectors converges to one. 
+At large dimension count, the distance between any two randomly chosen points becomes nearly identical. 
+The ratio of the maximum to minimum distance between points approaches 1, making nearest and farthest neighbors almost equidistant.
+Solutons:
+\begin{itemize}
+    \item \textbf{Manhatten Distance:} use the L1 distance metric,
+    \item \textbf{Mahalanobis/Ridge Distance:} handle high-dimensional collinearity and small sample sizes better than standard centroid distances,
+    \item \textbf{Pre-Reduce Dimensions:} Apply a reduction in advance of any ownstream operation.
+\end{itemize}
+
+
+\section{PCA}
+\label{sec:representation-pca-an-eigenvector-view}
+For centred data, Principle Componant Analysis (PCA) diagonalises the covariance matrix and keeps the largest-variance eigen-directions:
+\begin{equation}
+    \underbrace{\Sigma}_{\text{feature covariance}}
+    =
+    \underbrace{Q}_{\text{variance directions}}
+    \underbrace{\operatorname{diag}(\lambda_1,\ldots,\lambda_{N_{\text{features}}})}_{\text{variance scales}}
+    Q^\top
+    .
+\end{equation}
+The eigenstructure reminder is in \cref{subsec:la-eigenvectors-and-eigenvalues}.
+Keeping the $N_{\text{components}}$ largest-variance directions gives
+\[
+    z
+    =
+    Q_{[:N_{\text{components}}]}^\top
+    (x-\mu).
+\]
+Under squared reconstruction error, this is the optimal linear subspace of that rank for the observed data.
+Because PCA ignores labels, low-variance predictive signal can be removed.
+
+\section{Whitening: PCA and ZCA}
+\label{sec:representation-whitening-pca-and-zca}
+Whitening aims for transformed covariance near the identity.
+Using the PCA eigensystem, two common transforms are
+\begin{align}
+    \underbrace{z_{\mathrm{PCAwhite}}}_{\text{whitened in PCA coordinates}}
+    &=
+    \underbrace{\operatorname{diag}\!\left((\lambda_i+\epsilon)^{-1/2}\right)}_{\text{equalise variance by direction}}
+    Q^\top(x-\mu),\\
+    \underbrace{z_{\mathrm{ZCA}}}_{\text{whitened near original orientation}}
+    &=
+    Q\operatorname{diag}\!\left((\lambda_i+\epsilon)^{-1/2}\right)Q^\top(x-\mu).
+\end{align}
+The stabiliser $\epsilon$ prevents tiny eigenvalues from exploding noise; exact identity covariance is recovered only in the ideal unstabilised full-rank case.
+PCA whitening ends in eigenvector coordinates; ZCA rotates back toward the original coordinate orientation.
+
+\figpdf[.96\textwidth]{pca_zca_whitening}{Synthetic correlated data after centring, PCA whitening and ZCA whitening; both decorrelate/rescale, but their output orientations differ.}
+
+\subsection{Whitening versus Normalisation}
+\label{sec:representation-whitening-versus-normalisation}
+Whitening targets cross-feature linear correlation as well as scale.
+Ordinary standardisation changes each feature independently.
+BatchNorm, LayerNorm and RMSNorm also normalise selected statistics rather than generally whitening the representation; see \cref{sec:stability-normalisation-control-the-scale-of-intermediate-representations}.
+
+\section{t-SNE, UMAP and latent visualisation}
+\label{sec:representation-t-sne-umap-and-latent-visualisation}
+t-SNE and UMAP build low-dimensional views that prioritise neighbourhood relationships rather than globally faithful geometry.
+UMAP assumes that local neighbour relations reveal a lower-dimensional structure; t-SNE has a neighbourhood-scale hyperparameter commonly called \textbf{perplexity}.
+Use either primarily as an exploratory view, not proof that visual clusters are real physical classes.
+Check preprocessing, neighbourhood-scale settings, random seeds and external labels before interpreting a plot.
+
+\begin{tabularx}{\linewidth}{@{}L{.21\linewidth}YY@{}}
+    \toprule
+    Method & Useful assumption & Failure to test \\
+    \midrule
+    PCA & High variance contains useful linear structure & Signal lies in low-variance directions \\
+    Whitening & Linear correlation/scale are nuisance structure & Small-variance directions are mostly noise \\
+    t-SNE / UMAP & Local neighbours reveal meaningful organisation & Global distance/cluster appearance is over-interpreted \\
+    Autoencoder & Reconstruction preserves useful information & Rare task-critical signal contributes little to average reconstruction \\
+    \bottomrule
+\end{tabularx}
+

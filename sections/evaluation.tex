@@ -1,0 +1,213 @@
+\chapter{Evaluation Methods}
+\label{chap:evaluation}
+To evaluate a model, we look beyond the loss function. 
+There are a few reasons for this, and that largest is simply that most evaluation methods are \textit{not} differentiable.
+Therefore our most useful and expressive evaluation metrics (a suite of error representations) cannot be used during training.
+We can use them afterwards though.
+
+\section{Classification Evaluation}
+\label{sec:evaluation-classification-evaluation-the-confusion-matrix}
+For binary classification, predictions fall into true positive (TP), false positive (FP), true negative (TN) and false negative (FN).
+\subsection{Confusion Matrix}
+\begin{center}
+    \small
+    \begin{tabular}{@{}lcc@{}}
+    \toprule
+     & Actual positive & Actual negative \\
+    \midrule
+    Predicted positive & TP & FP \\
+    Predicted negative & FN & TN \\
+    \bottomrule
+    \end{tabular}
+\end{center}
+Accuracy $(\mathrm{TP}+\mathrm{TN})/N_{\text{examples}}$ can hide rare-class failure because the majority class dominates the count.
+
+\subsection{Precision, Recall and F1}
+\label{sec:evaluation-precision-recall-and-f1}
+\begin{align}
+    \underbrace{P}_{\text{precision: correctness of alerts}}
+    &=\frac{\mathrm{TP}}{\mathrm{TP}+\mathrm{FP}},\\
+    \underbrace{R}_{\text{recall: coverage of positives}}
+    &=\frac{\mathrm{TP}}{\mathrm{TP}+\mathrm{FN}},\\
+    F_\beta
+    &=(1+\beta^2)\frac{PR}{\beta^2P+R}.
+\end{align}
+Larger $\beta$ weights recall more strongly and smaller positive $\beta$ weights precision more strongly.
+F1 ignores TN directly, so it is not automatically suitable when correctly rejecting negatives is itself important.
+
+\begin{calloutspecialcase}
+    The $F_1$ score is $F_\beta$ with $\beta=1$.
+\end{calloutspecialcase}
+
+
+\subsection{ROC curves, AUC-ROC and Precision--Recall}
+\label{sec:evaluation-roc-curves-auc-roc-and-precision-recall}
+The Receiver Operating Characteristic (ROC) curves compares true-positive rate against false-positive rate at different thresholds.
+ROC-Area-Under-Curve (AUC) is the probability that a random positive is ranked above a random negative.
+
+\figpdf[.9\textwidth]{roc_precision_recall}{ROC and precision--recall curves expose different threshold trade-offs.}
+
+For rare events, a small false-positive rate can still create many more false alerts than true alerts.
+Precision--Recall curves expose that directly, so rare-event systems should not rely on accuracy or ROC-AUC alone.
+
+\begin{calloutpractical}
+    Rare positives: report precision, recall and a precision--recall curve, then choose threshold from false-alarm versus miss cost.
+\end{calloutpractical}
+
+
+\section{Folded Validation}
+\label{sec:evaluation-cross-validation-and-fold-choice}
+As ML practitioners, we like to get statistical answers to our questions, and yet this model evaluation section trains one model and evaluates once with multiple metrics.
+This is \textit{not} a strong statistical methodology, and so we train repeats on subsets of the data. 
+These subsets are folds, and each fold is validated once while the others train the model.
+
+The mean fold score is
+\[
+    \bar s
+    =
+    \frac{1}{N_{\text{folds}}}
+    \sum_{i=1}^{N_{\text{folds}}}
+    \underbrace{s_i}_{\text{score on held-out fold }i}.
+\]
+\begin{calloutpractical}
+    Fold scores are correlated because their training sets overlap.
+\end{calloutpractical}
+
+\begin{figure}[htbp]
+    \centering
+    \begin{tikzpicture}[x=.97cm,y=.54cm]
+    \foreach \r in {0,...,4}{
+    \node[anchor=east,font=\small] at (-.16,-\r) {Run \the\numexpr\r+1\relax};
+    \foreach \c in {0,...,4}{
+    \ifnum\c=\r \fill[amber!85] (\c*1.7,-\r-.35) rectangle ++(1.5,.75);
+    \else \fill[deepblue!82] (\c*1.7,-\r-.35) rectangle ++(1.5,.75);\fi
+    \node[white,font=\small] at (\c*1.7+.75,-\r+.02) {\the\numexpr\c+1\relax};}}
+    \fill[deepblue!82] (1,-5.7) rectangle ++(.35,.3);
+    \node[anchor=west,font=\scriptsize] at (1.45,-5.55) {Training};
+    \fill[amber!85] (4.2,-5.7) rectangle ++(.35,.3);
+    \node[anchor=west,font=\scriptsize] at (4.65,-5.55) {Validation};
+    \end{tikzpicture}
+    \caption{Five-fold cross-validation: each fold is held out once.}
+\end{figure}
+    
+\begin{tabularx}{\linewidth}{@{}L{.24\linewidth}YY@{}}
+    \toprule
+    Split strategy & Problem it Solves & Main leakage controlled \\
+    \midrule
+    Random K-fold & Examples are approximately independent and similarly distributed & Dependence on one arbitrary split \\
+    Stratified K-fold & Class proportions vary strongly & Unrepresentative class balance \\
+    Group K-fold & Repeated measurements share subject/run/instrument identity & Same group appearing on both sides \\
+    Forward / time-series split & Future prediction & Training on future observations \\
+    Nested CV & Hyperparameter selection with limited data & Reusing selection folds for final assessment \\
+    \bottomrule
+\end{tabularx}
+
+\begin{calloutpractical}
+Split by the independent unit: keep repeated measurements from one subject/run together, and preserve time order for forecasting.
+\end{calloutpractical}
+
+
+\section{Ranking metrics}
+\label{sec:evaluation-retrieval-and-ranking-metrics}
+
+\paragraph{Recall@K.}
+If $N_{\text{relevant}}$ items exist and $N_{\text{relevant in top K}}$ survive the first stage,
+\[
+    \underbrace{\operatorname{Recall@K}}_{\text{candidate coverage}}
+    =
+    \frac{N_{\text{relevant in top K}}}{N_{\text{relevant}}}.
+\]
+A downstream reranker cannot recover an item that retrieval never produced.
+
+\paragraph{MRR.}
+Mean Reciprocal Rank rewards putting the first relevant result near the top:
+\[
+    \operatorname{MRR}
+    =
+    \frac{1}{N_{\text{queries}}}
+    \sum_q
+    \frac{1}{\underbrace{\operatorname{rank}_{q,\text{first relevant}}}_{\text{where useful information first appears}}}.
+\]
+
+\paragraph{NDCG.}
+Discounted Cumulative Gain gives top positions more weight and allows graded relevance:
+\[
+    \underbrace{\operatorname{NDCG@K}}_{\text{normalised ranking quality}}
+    =
+    \frac{
+    \sum_{r=1}^{K}
+    \frac{2^{\operatorname{relevance}_r}-1}{\log_2(r+1)}
+    }{
+    \underbrace{\operatorname{IDCG@K}}_{\text{best possible ordering for this query}}
+    }.
+\]
+The logarithmic discount is why swapping ranks 1 and 2 matters much more than swapping ranks 101 and 102.
+\figpdf[.76\textwidth]{ndcg_discount}{NDCG's position discount falls quickly near the top, so high-ranking mistakes receive most of the metric weight.}
+
+\begin{calloutpractical}
+Evaluate candidate generation with coverage-oriented metrics such as Recall@K, then evaluate the later ordering with NDCG/MRR; one scalar for the whole funnel can hide which stage failed.
+\end{calloutpractical}
+
+\section{Generative Evaluation}
+\label{sec:evaluation-generative-and-rag-evaluation}
+\subsection{Golden Dataset}
+A \textbf{golden dataset} acts like a test suite. 
+A perfect, human derived set of examples allows reruns whenever the system changes, in the style of unit tests in software engineering.
+Because models have biases, \textbf{LLM as a Judge} is limited, and requires calibration, usually from a golden set.
+
+\subsection{Rag Evaluation}
+\textbf{RAGAS}-style evaluation focuses on context precision/recall, answer relevancy and faithfulness.
+\textbf{HELM}-style benchmarking instead asks broader base-model capability questions across standardised scenarios.
+
+\begin{calloutmemoryhook}
+    For RAG, separate ``did we retrieve the evidence?'' from ``did the generator use the evidence correctly?''.
+\end{calloutmemoryhook}
+
+\section{A/B Testing (Online Evaluation)}
+\label{sec:evaluation-online-experiments-and-ab-testing}
+How do you know whether a model is actually better in practice than an alternative?
+You compare them in the real-world setting. 
+We need a statistically strong signal to justify rolling out an iteration, and so we use statistics to answer the question.
+
+We turn the deployment into an experiment, testing the delta:
+\[
+    \underbrace{\widehat{\Delta}}_{\text{estimated treatment effect}}
+    =
+    \underbrace{\bar y_{\text{treatment}}}_{\text{new system}}
+    -
+    \underbrace{\bar y_{\text{control}}}_{\text{old system}}.
+\]
+\textbf{Persistent assignment}, such as a stable hash of user identity, keeps one user in one condition and avoids mixing treatment exposure.
+
+The null hypothesis is commonly $H_0:\Delta=0$.
+A p-value asks how extreme the observed statistic would be under the null.
+The standard-error scaling in \cref{sec:foundations-confidence-intervals} provides a sample-size approximation called the \textbf{Minimum Detectable Effect} (MDE):
+\[
+    \underbrace{\operatorname{MDE}}_{\text{smallest reliably detectable effect}}
+    \propto
+    \frac{1}{\sqrt{N_{\text{independent cases}}}}
+    \quad\text{(all else equal)}.
+\]
+Halving the target MDE therefore costs roughly four times as many independent observations under the same noise/decision assumptions.
+
+\begin{center}
+    \small
+    \begin{tabularx}{.9\linewidth}{@{}L{.25\linewidth}YY@{}}
+    \toprule
+     & Test says no effect & Test says effect \\
+    \midrule
+    No real effect & Correct & Type I error \\
+    Real effect & Type II error & Correct detection \\
+    \bottomrule
+    \end{tabularx}
+\end{center}
+
+Repeatedly checking an ordinary fixed-horizon p-value and stopping the first time it crosses a threshold changes the testing procedure and inflates false-positive risk.
+Use a predeclared horizon or a sequential method whose stopping rule is part of the design.
+
+Ranking systems can also use \textbf{interleaving}: mix candidates from two rankers into one list so the same user/context provides a sensitive relative comparison.
+Interleaving is useful for direct ranker preference but does not replace product-level A/B metrics such as retention or revenue.
+
+\begin{calloutdegreeofexperiment}
+    Vary assignment unit, traffic split, metric, MDE, test duration, stopping rule, segmentation and whether competing ranking systems are compared by A/B assignment or interleaving.
+\end{calloutdegreeofexperiment}

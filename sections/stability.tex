@@ -1,0 +1,144 @@
+\chapter{Training Stability}
+\label{chap:stability}
+Now that we have covered architectures and optimisation methods, in theory we can design models which converge.
+However, in practice, these things are very delicate and we need to carefully tune our design according to our chosen architecture, optimisation method and other design choices.
+
+\section{Initialisation}
+\label{sec:Initialisation}
+A deep network repeatedly applies an update, and so an intuitive question is \textit{where should we start?}.
+Because forward activations and backward updates can grow or shrink layer after layer, any instabilities compound and explode/zero, rather than cancelling out.
+
+Zero-initialising all weights in a symmetric hidden layer prevents neurons from differentiating because equivalent units receive equivalent updates.
+So, we introduce randomness to break the symmetry, and deploy variance scaling to keep the starting signal numerically usable.
+
+\subsection{Xavier / Glorot and He / Kaiming Initialisation}
+\label{sec:stability-xavier-glorot-and-he-kaiming-initialisation}
+For a dense layer, common Gaussian starting variances are
+\begin{align}
+    \theta_{ij,\mathrm{Xavier}}
+    &\sim
+    \mathcal N\!\left(0,
+    \underbrace{\frac{2}{N_{\text{inputs}}+N_{\text{outputs}}}}_{\text{balance forward/backward scale}}
+    \right),\\
+    \theta_{ij,\mathrm{He}}
+    &\sim
+    \mathcal N\!\left(0,
+    \underbrace{\frac{2}{N_{\text{inputs}}}}_{\text{compensate ReLU half-zeroing}}
+    \right).
+\end{align}
+Xavier is a common starting point for linear/tanh-like activations; He/Kaiming is designed around ReLU-like activations.
+These are approximate signal-scale arguments, not guarantees that training remains well conditioned.
+
+\begin{calloutpractical}
+    ReLU-like activation: start with He/Kaiming; linear or tanh-like activation: Xavier/Glorot is a common baseline.
+\end{calloutpractical}
+
+\section{Normalisation}
+\label{sec:normalisation}
+Normalisation methods mainly differ in \textbf{which axes define the statistic}.
+\figpdf[.89\textwidth]{normalization_axes}{BatchNorm and LayerNorm normalise different slices of an activation tensor.}
+
+For $N_{\text{values}}$ values in the selected normalisation group:
+\[
+    \underbrace{\hat u_i}_{\text{centred/scaled value}}
+    =
+    \frac{
+     u_i-\overbrace{\frac{1}{N_{\text{values}}}\sum_j u_j}^{\mu_{\text{group}}}
+    }{
+    \sqrt{
+    \underbrace{\frac{1}{N_{\text{values}}}\sum_j(u_j-\mu_{\text{group}})^2}_{\sigma^2_{\text{group}}}
+    +\epsilon
+    }}.
+\]
+A learned scale and optional shift can restore useful amplitude/offset after normalisation.
+
+\subsection{Batch Normalisation}
+\label{subsec:stability-batch-normalisation}
+BatchNorm averages across examples for corresponding features/channels during training and usually uses running training statistics at inference.
+It can improve optimisation, but tiny or nonrepresentative batches make its reference statistics noisy or mismatched.
+For example: In a house price prediction model, we normalise the \texttt{neighbour\_house\_price} feature to the average of the other houses in the batch.
+
+\subsection{Layer Normalisation}
+\label{subsec:stability-layer-normalisation}
+LayerNorm averages within each example/token across a chosen feature set, so its statistics do not depend on unrelated examples in the batch.
+This is why it fits sequence models with variable or small batch sizes well.
+For example, In a house price prediction model, we may average all the input features of one example.
+
+\subsection{RMSNorm}
+\label{subsec:stability-rmsnorm}
+RMSNorm controls vector magnitude without subtracting the mean:
+\[
+    \operatorname{RMSNorm}(h)_i
+    =
+    \theta_{\text{scale},i}
+    \frac{h_i}{
+    \sqrt{\frac{1}{N_{\text{features}}}\sum_j h_j^2+\epsilon}}
+    .
+\]
+It is cheaper than full centring-and-scaling and is common in modern language models.
+
+\begin{table}[htbp]
+    \centering
+    \small
+    \begin{tabularx}{\linewidth}{@{}L{.19\linewidth}YYY@{}}
+    \toprule
+     & BatchNorm & LayerNorm & RMSNorm \\
+    \midrule
+    Statistics over & Batch, per feature/channel & Features within one example/token & Features within one example/token \\
+    Subtract mean? & Yes & Yes & No \\
+    Scale by & Standard deviation & Standard deviation & Root mean square \\
+    Depends on other examples? & During training, yes & No & No \\
+    \bottomrule
+    \end{tabularx}
+    \caption{Normalisation methods.}
+\end{table}
+
+These methods do not generally whiten cross-feature covariance; whitening is separated in \cref{sec:representation-whitening-pca-and-zca,sec:representation-whitening-versus-normalisation}.
+
+\section{Regularisation}
+Another method of improving stability is to penalise unstable changes within the model. 
+For example, we may want to penalise parameter updates which are very large, because these \textit{can} lead to gradient explosions.  
+\label{sec:stability-regularisation-l1-and-l2}
+A regularised objective exposes the trade-off directly:
+\[
+    \underbrace{\mathcal L_{\text{total}}(\theta)}_{\text{what optimisation sees}}
+    =
+    \underbrace{\mathcal L_{\text{data}}(\theta)}_{\text{fit observations}}
+    +
+    \underbrace{\lambda R(\theta)}_{\text{parameter preference}}.
+\]
+L2 uses $R(\theta)=\|\theta\|_2^2$ and usually shrinks parameters smoothly.
+L1 uses $R(\theta)=\|\theta\|_1$ and can drive coefficients exactly to zero.
+Elastic Net combines both.
+The interpretation depends on parameterisation, so ``small weights'' is not universally the same as ``simple realised function''.
+
+\begin{calloutintuition}
+    L1 is basically feature selection when individual weights map cleanly to input features.
+    L2 shrinks rather than deletes them.
+\end{calloutintuition}
+
+The Bayesian MAP view is in \cref{sec:foundations-maximum-likelihood-and-maximum-a-posteriori-estimation}.
+For Adam, decoupled weight decay changes the update relative to putting an L2 gradient inside Adam; see \cref{sec:optimisation-adamw-decouple-weight-decay-from-gradient-adaptation}.
+
+\subsection{Dropout}
+\label{sec:stability-dropout-and-stochastic-regularisation}
+In inverted dropout, each activation is randomly kept with probability $1-p_{\text{drop}}$ and rescaled so its conditional expectation is unchanged:
+\[
+    \tilde h_j
+    =
+    \underbrace{\frac{m_j}{1-p_{\text{drop}}}}_{\text{random keep + expectation-preserving scale}}h_j,
+    \qquad
+    m_j\sim\operatorname{Bernoulli}(1-p_{\text{drop}}).
+\]
+Dropout discourages dependence on one exact active pathway, but too much stochasticity can make optimisation unnecessarily difficult.
+It is disabled at inference.
+
+\section{Augmentation}
+\label{sec:stability-data-augmentation-and-symmetry-assumptions}
+Augmentation asserts that a transformation should preserve or predictably transform the target.
+A horizontal flip may preserve animal identity but invert left/right anatomy, time reversal may violate causality in a physical signal.
+Augmentation is an inductive-bias choice, not free extra data.
+See \cref{sec:nfl-inductive-bias-the-assumptions-that-make-learning-possible}.
+
+
+

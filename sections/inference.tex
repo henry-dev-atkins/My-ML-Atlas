@@ -1,0 +1,978 @@
+\chapter{Inference and Model Compression}
+\label{chap:inference}
+Training asks how to learn a useful function.
+Inference asks how to execute that learned function repeatedly under latency, throughput, memory and cost constraints.
+The central design tension is
+\[
+\boxed{
+\text{quality}
+\longleftrightarrow
+\text{latency}
+\longleftrightarrow
+\text{throughput}
+\longleftrightarrow
+\text{memory}
+\longleftrightarrow
+\text{cost}
+}.
+\]
+
+\section{Quantisation: spend fewer bits on tolerant values}
+\label{sec:inference-quantisation}
+Quantisation maps continuous values onto a finite set of representable levels.
+One useful scalar picture is
+\[
+\underbrace{q}_{\text{stored integer}}
+=
+\operatorname{round}\!\left(
+\frac{\underbrace{x}_{\text{full-precision value}}}{\underbrace{s}_{\text{quantisation scale}}}
+\right),
+\qquad
+\underbrace{\hat x}_{\text{reconstructed value}}
+=sq.
+\]
+The approximation saves memory and often bandwidth/compute on suitable hardware, while introducing numeric error.
+\figpdf[.76\textwidth]{quantisation_levels}{Quantisation replaces continuous values with nearby discrete levels; fewer levels increase approximation error but reduce representation cost.}
+
+\subsection{PTQ versus QAT}
+\label{subsec:inference-ptq-qat}
+\textbf{Post-training quantisation (PTQ)} trains normally and quantises afterwards.
+It is cheap and simple, but the trained model never adapted to the low-precision distortion.
+\textbf{Quantisation-aware training (QAT)} simulates quantisation during training so the parameters can move toward a solution that survives deployment precision.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[node distance=7mm and 12mm]
+\node[flow] (train1) {Train full\\precision};
+\node[flow,right=of train1] (quant1) {Quantise\\afterwards};
+\node[yesbox,right=of quant1] (ptq) {PTQ};
+\node[flow,below=13mm of train1] (train2) {Train with simulated\\quantisation};
+\node[flow,right=of train2] (quant2) {Deploy same\\low precision};
+\node[yesbox,right=of quant2] (qat) {QAT};
+\draw[arr] (train1)--(quant1);\draw[arr] (quant1)--(ptq);
+\draw[arr] (train2)--(quant2);\draw[arr] (quant2)--(qat);
+\end{tikzpicture}
+\caption{PTQ tests whether a trained model survives quantisation; QAT exposes the model to that distortion while it can still adapt.}
+\end{figure}
+
+Activation-aware methods such as AWQ allocate extra care to weight directions whose quantisation error is more consequential for observed activations.
+The broader principle is to spend precision where the function is sensitive instead of treating every parameter equally.
+
+\begin{calloutmemoryhook}
+PTQ tests whether the model survives low precision; QAT teaches it to survive.
+\end{calloutmemoryhook}
+
+\begin{calloutdegreeofexperiment}
+Vary bit width, weight-only versus weight+activation quantisation, per-channel/group scaling, calibration data and which sensitive layers remain at higher precision.
+\end{calloutdegreeofexperiment}
+
+\section{Knowledge distillation: learn from a teacher distribution}
+\label{sec:inference-distillation}
+A hard label says only which class won.
+A teacher distribution can also reveal which alternatives are plausible:
+\[
+[0.70,\ 0.20,\ 0.08,\ 0.02]
+\quad\text{contains more relative structure than}\quad
+[1,\ 0,\ 0,\ 0].
+\]
+A smaller student can therefore optimise both the ground-truth objective and a teacher-matching term:
+\[
+\underbrace{\mathcal L_{\text{student}}}_{\text{compact model objective}}
+=
+\underbrace{\lambda\mathcal L_{\text{labels}}}_{\text{task truth}}
++
+\underbrace{(1-\lambda)\KL(P_{\text{teacher}}\|P_{\text{student}})}_{\text{match teacher structure}}.
+\]
+The student trades capacity for cheaper inference; the teacher's uncertainty/mistakes become part of the supervision.
+
+\begin{calloutbias}
+If the teacher's probability structure captures useful similarities between outputs, matching it can transfer more information than hard labels alone; teacher bias is transferred too.
+\end{calloutbias}
+
+\section{Cascades: reserve expensive models for hard cases}
+\label{sec:inference-cascades}
+If most inputs are easy, running the most expensive model on every request wastes compute.
+A cascade routes easy/confident cases through a cheap model and escalates only uncertain or high-risk cases.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[node distance=8mm and 11mm]
+\node[flow] (x) {Input};
+\node[flow,right=of x] (small) {Cheap model};
+\node[decisionnode,right=of small] (gate) {easy /\\confident?};
+\node[yesbox,above right=5mm and 13mm of gate] (out1) {Return\\prediction};
+\node[flow,below right=5mm and 13mm of gate] (large) {Expensive\\model};
+\node[yesbox,right=of large] (out2) {Return\\prediction};
+\draw[arr] (x)--(small);\draw[arr] (small)--(gate);
+\draw[arr] (gate)--node[above,font=\scriptsize]{yes}(out1);
+\draw[arr] (gate)--node[below,font=\scriptsize]{no}(large);
+\draw[arr] (large)--(out2);
+\end{tikzpicture}
+\caption{A cascade turns model difficulty into a routing problem.}
+\end{figure}
+
+Expected compute becomes
+\[
+\underbrace{\E[C]}_{\text{average serving cost}}
+=
+\underbrace{C_{\text{cheap}}}_{\text{paid every request}}
++
+\underbrace{P(\text{escalate})C_{\text{expensive}}}_{\text{paid only on routed cases}}.
+\]
+The gate is therefore as important as the component models.
+
+\section{LLM inference: prefill versus decode}
+\label{sec:inference-prefill-decode}
+Autoregressive LLM serving contains two different phases.
+
+\textbf{Prefill} processes the already-known prompt and creates the attention state for its tokens.
+Prompt tokens can be processed with substantial parallelism because they are all available.
+\textbf{Decode} generates one new token at a time because token $t+1$ cannot be chosen before token $t$ exists.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[node distance=7mm and 10mm]
+\node[flow] (prompt) {Prompt tokens\\known together};
+\node[flow,right=of prompt] (prefill) {Prefill\\parallel prompt work};
+\node[yesbox,right=of prefill] (state) {KV state};
+\node[flow,below=13mm of state] (decode) {Decode\\one new token};
+\node[yesbox,right=of decode] (append) {Append token};
+\draw[arr] (prompt)--(prefill);\draw[arr] (prefill)--(state);
+\draw[arr] (state)--(decode);\draw[arr] (decode)--(append);
+\draw[arr,rounded corners] (append.south)--++(0,-.6)--([yshift=-.6cm]decode.south)--(decode.south);
+\end{tikzpicture}
+\caption{Prefill builds state from a known prompt; decode repeatedly extends the sequence one token at a time.}
+\end{figure}
+
+\section{KV cache: save repeated attention work}
+\label{sec:inference-kv-cache}
+During autoregressive decode, old tokens keep the same key/value representations.
+Recomputing them for every new token is wasteful, so serving systems cache
+\[
+(K_1,V_1),\ldots,(K_{N_{\text{context}}},V_{N_{\text{context}}}).
+\]
+The next token computes only its new query/key/value and reads the cached history.
+This exchanges repeated compute for memory:
+\[
+\boxed{
+\text{KV cache memory}
+\propto
+N_{\text{layers}}
+\times
+N_{\text{context tokens}}
+\times
+N_{\text{KV dims}}
+\times
+\text{bytes/value}
+}.
+\]
+Long-context inference therefore becomes a memory-management problem even when model weights fit comfortably.
+
+\begin{calloutmemoryhook}
+KV cache remembers old attention keys/values so decode does not recompute the past.
+\end{calloutmemoryhook}
+
+\section{Batching and continuous batching}
+\label{sec:inference-continuous-batching}
+Static batching is efficient when requests have similar shapes.
+Autoregressive requests finish at different output lengths, so a static batch can leave accelerator slots idle.
+Continuous batching admits new requests as old requests finish.
+
+\begin{center}
+\small
+\begin{tabularx}{.88\linewidth}{@{}L{.22\linewidth}Y@{}}
+\toprule
+\textbf{Static} & A: \code{============}\quad B: \code{===\phantom{=========}} \\
+\textbf{Continuous} & A: \code{============}\quad B: \code{===}\quad C starts when B finishes \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Paged KV-memory schemes similarly try to avoid reserving large contiguous cache blocks for every request.
+The precise serving engine changes, but the systems goal is stable: keep expensive accelerator memory and compute occupied by useful work.
+
+\section{Inference evolution and design axes}
+\label{sec:inference-evolution}
+\begin{center}
+\small
+\begin{tabularx}{.97\linewidth}{@{}L{.18\linewidth}L{.22\linewidth}YY@{}}
+\toprule
+\textbf{Step} & \textbf{What changed} & \textbf{Problem targeted} & \textbf{Trade-off} \\
+\midrule
+Full precision & Baseline execution & Maximum numeric fidelity & High memory/bandwidth \\
+PTQ / QAT & Lower bit-width & Serving memory/throughput & Quantisation error / extra training \\
+Distillation & Smaller student & Model size/latency & Student capacity limit \\
+Cascade & Conditional model use & Waste on easy cases & Gate errors / system complexity \\
+KV caching & Reuse old attention state & Repeated decode compute & Cache memory \\
+Continuous batching & Dynamic request scheduling & Accelerator under-utilisation & More complex serving scheduler \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\begin{calloutdegreeofexperiment}
+Vary numeric precision, model size, cache representation, batch/scheduling policy, cascade gate, distillation objective and context budget.
+\end{calloutdegreeofexperiment}
+
+
+
+
+\section{Inference engines: the runtime around the model}
+\label{sec:inference-engines}
+A model defines which mathematical operations produce the next-token distribution.
+An \textbf{inference engine} decides how those operations should actually execute under many concurrent requests, finite accelerator memory and latency constraints.
+
+A useful separation is
+\[
+\boxed{
+\text{model}
+\rightarrow
+\text{engine}
+\rightarrow
+\text{kernels / hardware}
+}
+\]
+where the model defines the computation, the engine schedules and manages it, and kernels execute the resulting operations efficiently.
+
+Running
+\code{model.forward()}
+answers only the first problem.
+A serving engine must additionally decide which requests run now, how many tokens each receives, where their KV state lives, which kernels execute them and how work is divided across devices.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[node distance=7mm and 9mm]
+\node[flow] (request) {Requests};
+\node[flow,right=of request] (queue) {Admission /\\request queue};
+\node[flow,right=of queue] (sched) {Scheduler};
+\node[flow,right=of sched] (batch) {Physical\\batch};
+\node[flow,below=11mm of batch] (runner) {Model runner};
+\node[flow,left=of runner] (kernels) {GPU kernels};
+\node[yesbox,left=of kernels] (token) {Sampled\\tokens};
+\node[flow,below=11mm of sched] (kv) {KV-cache\\manager};
+
+\draw[arr] (request)--(queue);
+\draw[arr] (queue)--(sched);
+\draw[arr] (sched)--(batch);
+\draw[arr] (batch)--(runner);
+\draw[arr] (runner)--(kernels);
+\draw[arr] (kernels)--(token);
+\draw[arr] (sched)--(kv);
+\draw[arr] (kv)--(runner);
+\draw[arr,rounded corners] (token.south)--++(0,-.7)--([yshift=-.7cm]sched.south)--(sched.south);
+\end{tikzpicture}
+\caption{An autoregressive inference engine repeatedly converts waiting requests and stored state into the next useful batch of GPU work.}
+\label{fig:inference-engine-loop}
+\end{figure}
+
+The scheduler therefore runs inside a loop rather than constructing one fixed batch and executing it to completion.
+After each iteration, some requests finish, some need another token, new requests arrive and KV memory becomes free or occupied.
+
+A simplified engine iteration is
+\[
+\underbrace{
+\text{waiting requests}
++
+\text{active requests}
++
+\text{available KV memory}
+}_{\text{current serving state}}
+\longrightarrow
+\underbrace{\text{schedule next token work}}_{\text{engine decision}}
+\longrightarrow
+\underbrace{\text{GPU execution}}_{\text{model computation}}
+\longrightarrow
+\text{updated serving state}.
+\]
+
+Representative modern engines include \textbf{vLLM}, \textbf{SGLang} and \textbf{TensorRT-LLM}.
+Their implementations differ, but they solve largely the same resource-allocation problem.
+
+\begin{calloutmemoryhook}
+The model defines the maths; the inference engine decides how that maths occupies the machine.
+\end{calloutmemoryhook}
+
+
+\section{Paged KV memory: variable sequences need an allocator}
+\label{sec:inference-paged-kv}
+Section~\ref{sec:inference-kv-cache} treated KV cache as saved attention state.
+An engine must additionally decide where that state physically lives.
+
+Suppose each request reserves one large contiguous KV region for its maximum possible sequence length.
+A short generation then leaves much of that reservation unused, while variable sequence lengths make allocation and compaction awkward.
+
+\begin{center}
+\small
+\begin{tabularx}{.96\linewidth}{@{}L{.22\linewidth}YY@{}}
+\toprule
+\textbf{Layout} & \textbf{Mechanism} & \textbf{Consequence} \\
+\midrule
+Large contiguous reservation
+& Reserve one continuous region for each sequence
+& Simple addressing, but variable lengths create wasted or fragmented memory \\
+Paged / blocked KV
+& Divide KV state into fixed-size blocks and map logical sequence positions onto physical blocks
+& Easier allocation and reuse, at the cost of indirection and metadata \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Paged KV management applies the same basic idea as virtual memory:
+\[
+\underbrace{\text{logical token positions}}_{\text{request sees one sequence}}
+\longrightarrow
+\underbrace{\text{block table}}_{\text{address mapping}}
+\longrightarrow
+\underbrace{\text{physical KV blocks}}_{\text{possibly non-contiguous GPU memory}}.
+\]
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[node distance=5mm and 9mm]
+\node[flow] (seq) {Logical sequence\\tokens 1--10};
+\node[flow,right=of seq] (map) {Block table};
+
+\node[yesbox,right=12mm of map,yshift=9mm] (b1) {KV block 7};
+\node[yesbox,right=12mm of map] (b2) {KV block 2};
+\node[yesbox,right=12mm of map,yshift=-9mm] (b3) {KV block 11};
+
+\draw[arr] (seq)--(map);
+\draw[arr] (map)--(b1);
+\draw[arr] (map)--(b2);
+\draw[arr] (map)--(b3);
+\end{tikzpicture}
+\caption{Paged KV memory separates the logical sequence from its physical GPU-memory locations, so a growing sequence need not own one large contiguous reservation.}
+\label{fig:paged-kv}
+\end{figure}
+
+This makes cache capacity a scheduling resource.
+An engine can admit another request only if enough KV blocks are available for the work it expects to execute.
+
+When memory pressure becomes too high, possible responses include delaying admission, evicting reusable state, preempting an active sequence, recomputing discarded state or moving state to a slower memory tier.
+These choices exchange memory capacity against latency and repeated computation.
+
+\begin{calloutdegreeofexperiment}
+Vary KV block size, cache dtype, memory fraction assigned to KV state, eviction/preemption policy, maximum active sequences and whether cache state may spill to CPU or remote storage.
+\end{calloutdegreeofexperiment}
+
+
+\section{Prefix caching: identical history means identical old KV state}
+\label{sec:inference-prefix-cache}
+KV caching normally reuses history \emph{within} one request.
+\textbf{Prefix caching} extends the same argument across requests.
+
+If two requests begin with identical token prefixes under the same model state, their KV representations for that shared prefix are also identical.
+The second request can therefore reference existing KV blocks instead of recomputing that part of prefill.
+
+\[
+\underbrace{
+[\text{shared system prompt}\mid\text{shared document}]
+}_{\text{existing cached prefix}}
++
+\underbrace{[\text{new user suffix}]}_{\text{new work}}
+\quad\Rightarrow\quad
+\text{prefill only what is not reusable}.
+\]
+
+This is especially useful when many requests share large system prompts, retrieved documents, few-shot examples or previous conversation state.
+It provides little benefit when prefixes rarely repeat.
+
+The cache therefore introduces a second question alongside ordinary load:
+\[
+\boxed{
+\text{best worker}
+\neq
+\text{least busy worker}
+}
+\]
+because a somewhat busier worker holding most of the required prefix may require less total computation than an idle worker with no matching cache.
+
+\begin{calloutbias}
+If prompts contain repeated prefixes, cached KV state is reusable work; if prompts are mostly unique, maintaining and routing around that cache buys much less.
+\end{calloutbias}
+
+
+\section{Scheduling is the central inference-engine problem}
+\label{sec:inference-scheduling}
+Continuous batching from Section~\ref{sec:inference-continuous-batching} says that requests may enter and leave the active batch dynamically.
+The engine still needs a policy for deciding \emph{which} work enters each iteration.
+
+A useful abstraction is
+\[
+\underbrace{B_{\text{token budget}}}_{\text{GPU work allowed this iteration}}
+=
+\underbrace{N_{\text{decode tokens}}}_{\text{usually one per active decoder}}
++
+\underbrace{N_{\text{prefill tokens}}}_{\text{new prompt work}}.
+\]
+
+The scheduler allocates this finite token budget across competing requests.
+Larger batches often improve throughput, but waiting to construct them can increase latency.
+Serving therefore turns batching into a repeated online optimisation problem rather than a fixed training hyperparameter.
+
+\subsection{Chunked prefill}
+\label{subsec:inference-chunked-prefill}
+A long prompt can occupy substantial GPU time if its whole prefill executes in one iteration.
+Existing decoding requests then wait longer for their next token.
+
+\textbf{Chunked prefill} divides a long prompt into smaller pieces that can be interleaved with decode work:
+\[
+\text{long prefill}
+=
+\underbrace{\text{chunk}_1}_{\text{run}}
++
+\underbrace{\text{chunk}_2}_{\text{later}}
++
+\cdots.
+\]
+
+\begin{center}
+\small
+\begin{tabularx}{.96\linewidth}{@{}L{.23\linewidth}YY@{}}
+\toprule
+\textbf{Choice} & \textbf{Gain} & \textbf{Cost} \\
+\midrule
+Large prefill chunks
+& Efficient large GPU work; prompt completes in fewer scheduling rounds
+& Longer interruptions to active decode requests \\
+Small prefill chunks
+& Better opportunity to protect token-to-token latency
+& More scheduling/launch fragmentation and possibly lower prefill efficiency \\
+Separate prefill workers
+& Stronger isolation between prefill and decode
+& KV transfer and additional distributed-system complexity \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The broader scheduler may additionally vary request priority, fairness, maximum active sequences, preemption policy and admission control.
+These choices determine whether a saturated service fails through large queues, high tail latency or rejected work.
+
+\begin{calloutmemoryhook}
+Inference scheduling allocates scarce token work and KV memory across requests that arrive and finish at different times.
+\end{calloutmemoryhook}
+
+\begin{calloutdegreeofexperiment}
+Vary maximum batched tokens, maximum active sequences, prefill chunk size, scheduling policy, request priority, admission limits and the balance between prefill and decode work.
+\end{calloutdegreeofexperiment}
+
+
+\section{FlashAttention and PagedAttention solve different problems}
+\label{sec:inference-flash-paged}
+Two similarly named ideas operate at different levels.
+
+\textbf{FlashAttention} changes how an attention calculation moves intermediate data through the GPU memory hierarchy.
+It avoids materialising unnecessarily large intermediate attention matrices in slow accelerator memory and therefore targets the efficiency of an attention operation.
+
+\textbf{PagedAttention-style serving} changes how persistent KV state from many sequences is allocated and addressed.
+It therefore targets serving-time memory management.
+
+\[
+\boxed{
+\begin{array}{rcl}
+\text{FlashAttention} &\rightarrow& \text{execute attention efficiently},\\[2mm]
+\text{paged KV attention} &\rightarrow& \text{store and address many sequence states efficiently}.
+\end{array}
+}
+\]
+
+An engine can use both because they optimise different bottlenecks.
+This distinction is useful more generally: \textbf{scheduler}, \textbf{memory manager} and \textbf{kernel} optimisations should not be treated as interchangeable.
+
+\begin{calloutmemoryhook}
+FlashAttention optimises attention computation; paged attention optimises serving-state memory.
+\end{calloutmemoryhook}
+
+
+\section{Below the scheduler: kernels, fusion and graphs}
+\label{sec:inference-kernels}
+Once the scheduler has constructed a batch, that logical work must become efficient GPU operations.
+The execution path is approximately
+\[
+\text{scheduled tokens}
+\rightarrow
+\text{tensor shapes/layouts}
+\rightarrow
+\text{kernel selection}
+\rightarrow
+\text{GPU kernels}
+\rightarrow
+\text{outputs}.
+\]
+
+A Transformer block that conceptually contains normalisation, projections, RoPE, attention and an MLP may therefore execute through specialised kernels rather than a literal sequence of high-level framework operations.
+
+\textbf{Kernel fusion} combines neighbouring operations when doing so avoids intermediate memory traffic or repeated launch overhead.
+The benefit depends on the operations, tensor shapes and hardware; fusion that creates excessive register or shared-memory pressure can instead hurt performance.
+
+\textbf{Compiled execution} specialises parts of the model graph for expected operation patterns and shapes.
+\textbf{CUDA graphs} can replay a captured sequence of GPU operations with less CPU launch overhead when the execution structure is sufficiently stable.
+
+The engine therefore sits between model-level semantics and hardware-level execution:
+\[
+\underbrace{\text{PyTorch / model operations}}_{\text{what should happen}}
+\longrightarrow
+\underbrace{\text{engine + compiler decisions}}_{\text{how to execute}}
+\longrightarrow
+\underbrace{\text{CUDA / Triton / specialised kernels}}_{\text{machine work}}.
+\]
+
+Attention is not the only important kernel.
+Large dense projections are dominated by matrix multiplication, while sparse Mixture-of-Experts models additionally require expert routing, grouped matrix operations and communication between devices.
+
+\begin{calloutpracticaltip}
+A GPU that is not fully utilised may be waiting on the CPU scheduler, kernel launches, communication or memory rather than lacking enough model FLOPs.
+\end{calloutpracticaltip}
+
+
+\section{Speculative decoding: predict cheaply, verify expensively}
+\label{sec:inference-speculative}
+Standard autoregressive decode requires one target-model step before each accepted token.
+This serial dependency limits how much token generation can be parallelised.
+
+\textbf{Speculative decoding} uses a cheaper mechanism to propose several future tokens and then asks the target model to verify those proposals together.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[node distance=7mm and 10mm]
+\node[flow] (state) {Current\\sequence};
+\node[flow,right=of state] (draft) {Cheap proposer\\predicts several};
+\node[flow,right=of draft] (verify) {Target model\\verifies batch};
+\node[decisionnode,right=of verify] (accepted) {accepted\\prefix};
+\node[yesbox,right=of accepted] (out) {Append accepted\\tokens};
+
+\draw[arr] (state)--(draft);
+\draw[arr] (draft)--(verify);
+\draw[arr] (verify)--(accepted);
+\draw[arr] (accepted)--(out);
+\draw[arr,rounded corners] (out.south)--++(0,-.7)--([yshift=-.7cm]state.south)--(state.south);
+\end{tikzpicture}
+\caption{Speculative decoding spends cheap work proposing multiple tokens so that one target-model verification can sometimes advance the sequence by more than one token.}
+\label{fig:speculative-decoding}
+\end{figure}
+
+If the proposer predicts the target distribution well, several tokens are accepted per expensive target-model pass.
+If proposals are poor, the system pays proposal and verification overhead while advancing by few additional tokens.
+
+A useful quantity is therefore
+\[
+\underbrace{N_{\text{accepted per verification}}}_{\text{speculative progress}}
+\]
+rather than merely the number of tokens proposed.
+
+Possible proposers include a smaller draft model, simple continuation rules, extra prediction heads or specialised learned draft mechanisms.
+The common assumption is the same: future tokens can be predicted cheaply enough and accurately enough that verification saves target-model serial work.
+
+\begin{calloutbias}
+If cheap proposals strongly match the target model, speculative decoding converts prediction accuracy into lower serial decode cost; poor acceptance can make the extra work useless.
+\end{calloutbias}
+
+\begin{calloutdegreeofexperiment}
+Vary proposer architecture, number of drafted tokens, acceptance rule, draft/target size ratio and when speculation is enabled for a request.
+\end{calloutdegreeofexperiment}
+
+
+\section{Distributed inference: divide weights, layers, experts, context or requests}
+\label{sec:inference-distributed}
+One accelerator may be insufficient because the model does not fit, the KV cache consumes too much memory or one replica cannot provide the required throughput.
+
+Different forms of parallelism divide different things.
+
+\begin{center}
+\small
+\begin{tabularx}{.98\linewidth}{@{}L{.16\linewidth}L{.20\linewidth}YY@{}}
+\toprule
+\textbf{Parallelism} & \textbf{What is divided?} & \textbf{Useful pressure} & \textbf{Main new cost} \\
+\midrule
+Data
+& Requests / batches
+& More aggregate serving throughput
+& Replicated model weights; routing/load balance \\
+Tensor
+& Tensor operations within layers
+& Individual layers/model state need several GPUs
+& Frequent communication inside layers \\
+Pipeline
+& Groups of layers
+& Model spans devices
+& Pipeline bubbles and stage imbalance \\
+Expert
+& MoE experts
+& Sparse expert parameters distributed across GPUs
+& Token routing / all-to-all communication \\
+Context
+& Sequence positions
+& Very long contexts or attention state
+& Communication around distributed attention/state \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Parallelism is therefore not simply ``use more GPUs''.
+It changes both memory placement and the communication graph.
+
+For example, tensor parallelism can make a model fit by dividing weights across devices, but every token may then require communication between those devices.
+Adding GPUs can therefore lower latency when it removes a compute/memory bottleneck or increase latency when communication dominates.
+
+\[
+\boxed{
+\text{more devices}
+\rightarrow
+\text{more aggregate compute/memory}
+\quad\longleftrightarrow\quad
+\text{more communication}
+}
+\]
+
+The best serving topology depends on model architecture, request lengths, interconnect bandwidth, latency target and whether the objective is per-request speed or aggregate throughput.
+
+\begin{calloutdegreeofexperiment}
+Vary tensor-, pipeline-, data-, expert- and context-parallel sizes, replica count, device placement and the mapping between parallel ranks and physical interconnect topology.
+\end{calloutdegreeofexperiment}
+
+
+\section{Disaggregated serving: prefill and decode need not share GPUs}
+\label{sec:inference-disaggregation}
+Section~\ref{sec:inference-prefill-decode} separated autoregressive inference into prefill and decode mathematically.
+A modern serving system can also separate them \emph{physically}.
+
+Prefill typically provides large amounts of parallel token work, while decode repeatedly operates on small new-token batches and a growing KV cache.
+One shared worker must compromise between these different execution profiles.
+
+\textbf{Prefill/decode disaggregation} instead uses different accelerator pools:
+\[
+\underbrace{\text{request}}_{\text{prompt}}
+\rightarrow
+\underbrace{\text{prefill worker}}_{\text{build KV state}}
+\rightarrow
+\underbrace{\text{KV transfer}}_{\text{move state}}
+\rightarrow
+\underbrace{\text{decode worker}}_{\text{generate tokens}}.
+\]
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[node distance=8mm and 12mm]
+\node[flow] (req) {Request};
+\node[flow,right=of req] (router) {Router};
+\node[flow,right=of router] (prefill) {Prefill\\GPU pool};
+\node[yesbox,right=of prefill] (kv) {KV cache};
+\node[flow,right=of kv] (decode) {Decode\\GPU pool};
+\node[yesbox,right=of decode] (out) {Generated\\tokens};
+
+\draw[arr] (req)--(router);
+\draw[arr] (router)--(prefill);
+\draw[arr] (prefill)--(kv);
+\draw[arr] (kv)--node[above,font=\scriptsize]{GPU / network transfer}(decode);
+\draw[arr] (decode)--(out);
+\end{tikzpicture}
+\caption{Disaggregated serving allows prefill and decode to use independently sized and configured worker pools, but KV state must cross the boundary.}
+\label{fig:prefill-decode-disaggregation}
+\end{figure}
+
+The benefit is independent control.
+Prefill and decode pools may use different replica counts, parallelism strategies or even hardware chosen for their respective bottlenecks.
+
+The cost is that potentially large KV state must move between workers before decoding can continue.
+Fast GPU-to-GPU links and overlap between communication and computation therefore become part of the inference-engine problem.
+
+Disaggregation is not automatically faster.
+For short prompts, low concurrency or slow interconnects, keeping prefill and decode together can avoid transfer and routing overhead.
+
+\begin{calloutbias}
+If prefill and decode have sufficiently different resource requirements, separating them allows independent optimisation; the price is moving KV state between them.
+\end{calloutbias}
+
+\begin{calloutdegreeofexperiment}
+Vary prefill/decode worker ratio, parallelism within each pool, KV-transfer mechanism, placement topology, prefill chunking and whether requests are selectively or always disaggregated.
+\end{calloutdegreeofexperiment}
+
+
+\section{Routing becomes cache-aware}
+\label{sec:inference-kv-routing}
+Once a service contains many workers, a frontend must choose where each request executes.
+
+Simple round-robin routing assumes workers are interchangeable.
+KV caching breaks that assumption because different workers may already hold different reusable prefixes.
+
+A cache-aware routing decision therefore balances at least
+\[
+\boxed{
+\text{routing cost}
+\approx
+\underbrace{\text{new computation required}}_{\text{prefix not cached}}
++
+\underbrace{\text{existing worker load}}_{\text{queue / active requests}}
++
+\underbrace{\text{transfer cost}}_{\text{if state must move}}
+}.
+\]
+
+Sending every repeated prompt to its cache-rich worker maximises reuse but can create a hot worker.
+Sending everything to the emptiest worker balances load but can repeatedly throw away useful cached computation.
+The router therefore trades \textbf{locality} against \textbf{load}.
+
+This is the point where an inference \emph{engine} becomes part of a larger inference \emph{system}.
+Systems such as NVIDIA Dynamo can sit above engine workers and coordinate request routing, worker discovery, KV-aware placement and prefill/decode pools.
+
+\begin{calloutmemoryhook}
+With reusable KV state, routing decides where the computation is cheapest, not merely where the queue is shortest.
+\end{calloutmemoryhook}
+
+
+\section{Inference metrics: latency has internal structure}
+\label{sec:inference-metrics}
+A single average request latency hides different serving failures.
+Autoregressive systems commonly separate the user-visible path into
+\[
+\underbrace{\text{TTFT}}_{\text{request}\rightarrow\text{first token}}
+\qquad\text{and}\qquad
+\underbrace{\text{TPOT / ITL}}_{\text{spacing between later tokens}}.
+\]
+
+\textbf{Time to first token (TTFT)} contains queueing plus prompt/prefill work before useful output begins.
+\textbf{Inter-token latency (ITL)} measures the gaps between streamed tokens, while \textbf{time per output token (TPOT)} summarises generation time after the first token.
+Throughput reports completed requests or tokens per unit time.
+
+These metrics can move in opposite directions.
+Waiting briefly to build a larger batch may increase throughput while worsening latency; reserving resources for low-latency decode may improve ITL while reducing maximum aggregate throughput.
+
+The workload must therefore be specified alongside a benchmark:
+\[
+\boxed{
+\text{performance}
+=
+f(
+N_{\text{input tokens}},
+N_{\text{output tokens}},
+\text{arrival rate},
+\text{concurrency},
+\text{hardware},
+\text{precision},
+\text{parallelism},
+\text{cache reuse}
+).
+}
+\]
+
+``Tokens/s'' without those conditions is not a complete comparison.
+
+Tail metrics matter because overloaded queues, long prompts and unlucky scheduling decisions may affect a minority of requests far more than the mean.
+A service with acceptable mean TTFT but unacceptable p99 TTFT still provides poor latency guarantees to some users.
+
+\begin{center}
+\small
+\begin{tabularx}{.98\linewidth}{@{}L{.18\linewidth}L{.30\linewidth}Y@{}}
+\toprule
+\textbf{Symptom} & \textbf{Likely pressure} & \textbf{Questions to ask} \\
+\midrule
+High TTFT
+& Queueing or expensive prefill
+& Is arrival rate above capacity; are prompts long; would prefix reuse/chunking help? \\
+High ITL / TPOT
+& Decode scheduling, memory bandwidth or communication
+& Are prefills interrupting decode; is the active batch too large; is distributed communication expensive? \\
+Low throughput
+& GPU under-utilisation or inefficient execution
+& Is the GPU waiting on CPU scheduling, kernels, communication or too-small batches? \\
+KV OOM / preemption
+& Too much active sequence state
+& Is context/concurrency too high; can KV precision, allocation or admission policy change? \\
+Good mean, poor p99
+& Queueing or heterogeneous request interference
+& Which request class causes stalls; should admission, priority or P/D isolation change? \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\begin{calloutpracticaltip}
+Benchmark the request-length and concurrency distribution you expect to serve; engine rankings can reverse when the workload changes.
+\end{calloutpracticaltip}
+
+
+\section{Modern inference-engine design space}
+\label{sec:inference-engine-design-space}
+Modern engines combine optimisations at several distinct layers.
+
+\begin{center}
+\small
+\begin{tabularx}{.98\linewidth}{@{}L{.18\linewidth}L{.23\linewidth}YY@{}}
+\toprule
+\textbf{Layer} & \textbf{Example choice} & \textbf{What becomes cheaper} & \textbf{New cost / constraint} \\
+\midrule
+Numeric representation
+& Quantisation
+& Weight/KV memory and supported low-precision compute
+& Approximation error \\
+Request scheduling
+& Continuous batching / chunked prefill
+& Idle accelerator time and request interference
+& Scheduler complexity / latency trade-offs \\
+State memory
+& Paged KV allocation
+& Variable-length cache allocation
+& Address indirection / metadata \\
+Cross-request reuse
+& Prefix caching
+& Repeated prefill
+& Cache capacity, lookup and placement complexity \\
+Execution
+& Fused kernels / CUDA graphs / compilation
+& Memory traffic and launch overhead
+& Specialisation and implementation complexity \\
+Decode algorithm
+& Speculative decoding
+& Serial target-model steps
+& Proposal + verification work \\
+Device scaling
+& Tensor / pipeline / expert parallelism
+& Per-device model/compute requirement
+& Communication \\
+Fleet architecture
+& P/D disaggregation
+& Resource interference between phases
+& KV transfer and routing \\
+Fleet routing
+& KV-aware placement
+& Recomputed shared prefixes
+& Global state and load-balancing complexity \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The important distinction is \emph{which bottleneck an optimisation attacks}.
+Quantisation does not solve scheduling, paged KV allocation does not make an individual attention kernel fast, and a faster kernel does not prevent idle slots caused by poor request scheduling.
+
+\begin{calloutdegreeofexperiment}
+The full inference-engine experiment space includes numeric precision, KV representation, batch/token budget, scheduling policy, cache allocation, prefix reuse, kernel/backend choice, speculative method, parallelism topology, worker counts, routing policy and prefill/decode placement.
+\end{calloutdegreeofexperiment}
+
+
+\section{Inference-engine evolution}
+\label{sec:inference-engine-evolution}
+The serving stack evolved by repeatedly moving optimisation outward from one model execution toward the complete request fleet.
+
+\begin{center}
+\small
+\begin{tabularx}{.98\linewidth}{@{}L{.18\linewidth}L{.23\linewidth}YY@{}}
+\toprule
+\textbf{Step} & \textbf{What changed} & \textbf{Pressure addressed} & \textbf{New trade-off} \\
+\midrule
+Naive generation
+& Execute one request/token loop
+& Correct model output
+& Poor hardware utilisation \\
+Static batching
+& Execute several requests together
+& Small GPU operations
+& Wait for longest sequence / rigid batch \\
+KV caching
+& Preserve old attention state
+& Repeated attention computation
+& Growing memory use \\
+Continuous batching
+& Replace finished requests during generation
+& Idle batch slots
+& Online scheduling complexity \\
+Paged KV
+& Allocate sequence state in blocks
+& Fragmentation / variable lengths
+& Mapping metadata and allocator complexity \\
+Prefix caching
+& Reuse KV across requests
+& Repeated shared prefill
+& Cache management / routing locality \\
+Chunked prefill
+& Interleave portions of long prompts
+& Decode interruption
+& Prefill fragmentation \\
+Speculative decoding
+& Cheaply propose then verify several tokens
+& Serial decode dependency
+& Draft/verification overhead \\
+P/D disaggregation
+& Separate prompt and generation workers
+& Different prefill/decode resource profiles
+& KV communication \\
+KV-aware fleet routing
+& Route using cache state plus load
+& Duplicate work across replicas
+& Distributed metadata / coordination \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The progression can be compressed to
+\[
+\boxed{
+\begin{aligned}
+\text{make one model execution efficient}
+&\rightarrow
+\text{keep the accelerator occupied}\\
+&\rightarrow
+\text{manage sequence state efficiently}\\
+&\rightarrow
+\text{avoid unnecessary computation}\\
+&\rightarrow
+\text{optimise placement across the fleet}.
+\end{aligned}
+}
+\]
+
+\begin{calloutmemoryhook}
+Inference engines evolved from making a forward pass fast to deciding which useful work should occupy every byte, kernel and GPU.
+\end{calloutmemoryhook}
+
+
+\section{Engine families: same problem, different emphasis}
+\label{sec:inference-engine-families}
+Product details change quickly, so engine names are more useful as examples of design emphasis than as a fixed ranking.
+
+\begin{center}
+\small
+\begin{tabularx}{.98\linewidth}{@{}L{.18\linewidth}L{.27\linewidth}YY@{}}
+\toprule
+\textbf{System} & \textbf{Useful mental model} & \textbf{Characteristic emphasis} & \textbf{Role} \\
+\midrule
+vLLM
+& General high-throughput model runtime
+& Paged KV management, flexible scheduling, broad model/kernel support
+& Inference engine \\
+SGLang
+& Runtime where reusable request structure is explicit
+& Prefix/KV reuse, scheduling and large-scale LLM serving
+& Inference engine \\
+TensorRT-LLM
+& NVIDIA-specific model/runtime co-optimisation
+& Specialised kernels, low precision, batching and distributed execution
+& Inference engine \\
+NVIDIA Dynamo
+& Coordinate many engine workers as one serving system
+& Routing, discovery, KV-aware placement and disaggregated serving
+& Fleet / distributed-serving layer \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Choosing between engines should therefore begin with the workload and hardware rather than a benchmark headline.
+Relevant questions include model support, quantisation requirements, prefix-reuse structure, request lengths, latency target, accelerator type, distributed topology and which parts of the stack need to remain customisable.
+
+The stable abstraction is
+\[
+\boxed{
+\text{request}
+\rightarrow
+\text{route}
+\rightarrow
+\text{schedule}
+\rightarrow
+\text{allocate state}
+\rightarrow
+\text{execute kernels}
+\rightarrow
+\text{sample}
+\rightarrow
+\text{repeat}.
+}
+\]
+
+Once this flow is understood, an unfamiliar engine can be inspected by asking where it makes each decision and which resource that decision is trying to save.

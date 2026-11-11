@@ -1,0 +1,177 @@
+\chapter{Foundations: Learning Paradigms}
+\label{chap:objectives}
+
+\section{Types of Supervision}
+\label{sec:objectives-supervised-unsupervised-self-supervised-and-reinforcement-learning}
+
+\begin{table}[htbp]
+    \centering
+    \small
+    \begin{tabularx}{\linewidth}{@{}L{.18\linewidth}YY@{}}
+    \toprule
+    Paradigm & Training information & Typical goal \\
+    \midrule
+    Supervised & Input--target pairs & Classification, regression, forecasting \\
+    Unsupervised & Inputs without task labels & Density, clustering, compression \\
+    Self-supervised & Targets manufactured from inputs & Representation learning from structure in the data \\
+    Semi-supervised & Few labels plus many unlabelled examples & Label-efficient prediction \\
+    Reinforcement learning & States, actions and rewards through interaction & Policy maximising expected return \\
+    \bottomrule
+    \end{tabularx}
+    \caption{Learning paradigms mainly differ in where the training signal comes from.}
+\end{table}
+
+\section{Supervised Losses: Continuous}
+\label{sec:objectives-supervised-losses-for-continuous-targets}
+For residuals $e_i=y_i-\hat y_i$ over $N_{\text{examples}}$:
+
+\paragraph{MSE} makes large residuals disproportionately expensive and matches constant-variance Gaussian observation noise up to scale/constants.
+\[
+    \mathrm{MSE}&=\frac{1}{N_{\text{examples}}}\sum_i e_i^2.
+\]
+\paragraph{MAE} grows linearly with residual size and matches a Laplace-like noise model.
+\[
+    \mathrm{MAE}&=\frac{1}{N_{\text{examples}}}\sum_i |e_i|.
+\]
+\paragraph{RMSE} restores target units and is often more useful for reporting than for changing the optimiser itself. 
+See \cref{sec:evaluation-regression-metrics}.
+\[
+    \mathrm{RMSE}&=\sqrt{\mathrm{MSE}}.
+\]
+\paragraph{Huber} loss is quadratic near zero and linear for large residuals:
+\[
+    \ell_{\delta}(e)
+    =
+    \begin{cases}
+    \frac12e^2,&|e|\le\delta,\\
+    \delta\left(|e|-\frac12\delta\right),&|e|>\delta.
+\end{cases}
+\]
+It preserves a smooth small-error region while reducing the influence of large outliers relative to MSE.
+
+\begin{calloutmemoryhook}
+MSE squares outliers and MAE does not. Huber is quadratic near zero and linear far away.
+\end{calloutmemoryhook}
+
+\section{Supervised Losses: Discrete}
+\label{sec:objectives-classification-losses-and-logits}
+A logit is a number between which we map to a probability, for example we might say that a score out of 100 of 34 is more likley than not a 0 in a binary system.
+A binary logit $a$ is $p=\sigma(a)$ and,
+\paragraph{Binary Cross-Entropy} is
+\[
+    \ell_{\mathrm{BCE}}
+    =
+    -\underbrace{y\log p}_{\text{reward positive probability when }y=1}
+    -\underbrace{(1-y)\log(1-p)}_{\text{reward negative probability when }y=0}.
+\]
+Use implementations that combine the logit and BCE calculation for numerical stability.
+Independent sigmoid/BCE outputs suit labels that can be simultaneously true.
+
+For $N_{\text{classes}}$ mutually exclusive classes, softmax converts logits to a probability:
+\[
+    p_i
+    =
+    \frac{e^{a_i}}{\sum_{j=1}^{N_{\text{classes}}}e^{a_j}}.
+\]
+\paragraph{Categorical Cross-Entropy} for the true class is $-\log p_{\text{true class}}$.
+Training loss and deployment metric are separate design choices; accuracy, precision/recall and F1 are in \cref{sec:evaluation-classification-evaluation-the-confusion-matrix,sec:evaluation-precision-recall-and-f1}.
+
+
+\subsection{Differentiating Categories}
+\label{sec:models-gumbel-softmax-differentiable-categorical-choices}
+A hard categorical sample blocks ordinary pathwise gradients.
+Gumbel--Softmax replaces the hard one-hot choice during optimisation with a temperature-controlled softmax of noisy category logits:
+\[
+    \underbrace{y_i}_{\text{soft category weight}}
+    =
+    \operatorname{softmax}_i\!\left(
+    \frac{\underbrace{\log\pi_i}_{\text{category log-weight}}+\underbrace{g_i}_{\text{Gumbel noise}}}{\underbrace{\tau}_{\text{temperature}}}
+    \right).
+\]
+Lower temperature makes the vector more nearly one-hot but also makes gradients more brittle.
+A straight-through variant uses a hard forward choice with an approximate backward gradient.
+
+\section{Supervised Losses: Ranking and Preference}
+\label{sec:objectives-ranking-and-preference-objectives}
+Ranking differs from ordinary regression because the useful output is an ordering rather than a numerically calibrated score, which exposes many different dimensions we may evaluate.
+\begin{center}
+    \small
+    \begin{tabularx}{.96\linewidth}{@{}L{.18\linewidth}L{.28\linewidth}Y@{}}
+    \toprule
+    \textbf{Objective} & \textbf{Training question} & \textbf{Main trade-off} \\
+    \midrule
+    Pointwise & Is this item good? & Simple, but treats ranking as independent prediction \\
+    Pairwise & Should item $a$ rank above $b$? & Direct ordering signal; creates many possible pairs \\
+    Listwise & Is the whole ordered list useful? & Closest to ranking metrics; optimisation is less direct \\
+    \bottomrule
+    \end{tabularx}
+\end{center}
+
+A pairwise model needs only score differences:
+\[
+    \underbrace{P(a\succ b)}_{\text{$a$ should rank above $b$}}
+    =
+    \sigma\!\left(
+    \underbrace{s_a-s_b}_{\text{relative score}}
+    \right).
+\]
+This same relative-preference structure reappears in LLM preference optimisation in \cref{sec:llms-preference-optimisation}.
+
+Listwise metrics such as \textbf{NDCG} care much more about mistakes near the top of the ranking.
+Sorting is discrete, so small score changes can leave NDCG unchanged until two items swap order.
+Therefore, methods such as \textbf{LambdaRank} use smooth pairwise updates whose strength reflects how much a swap would change the ranking metric.
+The boosted-tree form \textbf{LambdaMART} is linked in \cref{subsec:trees-lambdamart}.
+
+\section{Supervised Losses: Representation}
+\label{sec:objectives-representation-learning-objectives}
+\paragraph{Reconstruction} objective asks an encoder/decoder pair to preserve information needed to rebuild the input:
+\[
+    \mathcal L_{\text{reconstruction}}
+    =
+    \left\|x-g_{\theta_{\text{decoder}}}(f_{\theta_{\text{encoder}}}(x))\right\|_2^2.
+\]
+Reconstruction does not guarantee preservation of task-relevant information.
+
+\paragraph{Contrastive} objectives instead shape relative geometry.
+A triplet-style objective says ``positive closer than negative by a margin'':
+\[
+    \mathcal L_{\text{triplet}}
+    =
+    \max\left(0,
+    \underbrace{d(z_{\text{anchor}},z_{\text{positive}})}_{\text{pull together}}
+    -
+    \underbrace{d(z_{\text{anchor}},z_{\text{negative}})}_{\text{push apart}}
+    +
+    \underbrace{m_{\text{margin}}}_{\text{required separation}}
+    \right).
+\]
+The important experimental choices are how positives/negatives are constructed, which distance is used, and whether augmentations preserve task signal.
+
+\section{Supervised Losses: Variational/Generative}
+\label{sec:objectives-variational-and-generative-objectives}
+A VAE balances data fit with a structured latent distribution:
+\[
+    \underbrace{\mathcal L_{\mathrm{VAE}}}_{\text{negative ELBO}}
+    =
+    \underbrace{-\E_{q_{\theta_{\text{encoder}}}(z\mid x)}\log p_{\theta_{\text{decoder}}}(x\mid z)}_{\text{reconstruction / likelihood}}
+    +
+    \underbrace{D_{\mathrm{KL}}\!\left(q_{\theta_{\text{encoder}}}(z\mid x)\|p(z)\right)}_{\text{latent prior compatibility}}.
+\]
+GANs, diffusion models and normalising flows use different objectives; ``generative model'' does not imply this ELBO.
+
+\section{Self-Supervised losses: Reinforcement-Learning}
+\label{sec:objectives-reinforcement-learning-objectives}
+A policy aims to maximise expected discounted reward:
+\[
+    \underbrace{J(\theta)}_{\text{policy objective}}
+    =
+    \E_{\pi_\theta}
+    \left[
+    \sum_{t=0}^{N_{\text{horizon}}}
+    \underbrace{\gamma^t}_{\text{discount}}
+    \underbrace{r_t}_{\text{reward}}
+    \right].
+\]
+The optimisation loss may combine policy-gradient, value-error and entropy terms.
+Reward, training loss and evaluation metric therefore need not be identical.
+Entropy itself is defined in \cref{sec:foundations-entropy}.

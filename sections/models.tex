@@ -1,0 +1,247 @@
+\chapter{Model Family Overview}
+\label{chap:models}
+
+We now will walk though the intuition behind some model families.
+Future Chapters dive into some specific model families in a \textit{lot} of detail - these will be skipped here.
+Generally, model types in this chapter are outdated, but are kept alive by the \textsc{SciKit-Learn} fans and Coursera\textsuperscript{TM}. 
+But first, a word about \textit{why} we need to impose assumptions on our models. 
+
+
+\section{No Free Lunch}
+\label{chap:nfl}
+
+\subsection{Finite Observations Do Not Generalise}
+\label{sec:nfl-why-finite-observations-are-not-enough}
+The observations $(1,2)$, $(2,4)$ and $(3,6)$ fit both
+\[
+    f_1(x)=2x,
+    \qquad
+    f_2(x)=2x+(x-1)(x-2)(x-3),
+\]
+yet the functions disagree at unseen inputs.
+Intravitally, we should choose the simpler, linear function.
+However, this is an assumption we are imposing on our model, and we should remember it.
+\figpdf[.79\textwidth]{nfl_two_functions}{Two functions can fit the same observations perfectly and disagree elsewhere; prediction requires a preference among compatible hypotheses.}
+
+\subsection{Occam's Zazor}
+\label{sec:nfl-occam-s-razor-is-also-a-bias}
+``Prefer simple explanations'' is useful only after choosing what simplicity means.
+A periodic physical law can be compact in a Fourier representation and awkward in a polynomial one.
+
+\subsection{NFL is Compatible with our Toolbox}
+NFL tells us that \textit{to get better task-specific accuracy we need to add assumptions}.
+We add assumptions with almost all of our design choices:
+\begin{itemize}
+    \item \textbf{Architecture:} Data modality and task assumptions.
+    \item \textbf{Statistical Guarantees:} sampling process, a restricted hypothesis family, a loss, or a confidence statement.
+    A useful intuition:
+    \[
+        \underbrace{\text{generalisation gap}}_{\text{population error} - \text{training error}}
+        \sim
+        \sqrt{\frac{\underbrace{\text{model-class complexity}}_{\text{more hypotheses cost more evidence}}+\underbrace{\text{confidence penalty}}_{\text{stronger guarantee costs evidence}}}{N_{\text{examples}}}}.
+    \]
+    The exact theorem changes with the assumptions and complexity measure.
+    The important point is that guarantees are conditional on structure; they do not contradict an assumption-free averaging theorem.
+    \item \textbf{Optimisers:} NFL results average search algorithms over broad objective-function families under their own assumptions.
+    Practical optimisers exploit gradients, curvature, smoothness and architecture-specific structure, so they are not being compared under an assumption-free real-world distribution.
+    The optimiser evolution in \cref{sec:optimisation-how-optimiser-ideas-evolved-a-branching-genealogy} is therefore a sequence of useful structural bets, not a contradiction of NFL.
+    \item \textbf{Domain:} Symmetries, topology, conservation laws, known dynamics, simulator structure or measurement constraints.
+\end{itemize}
+
+
+
+\section{Linear}
+\label{sec:models-linear-models-a-transparent-baseline}
+\paragraph{Linear regression} predicts with a feature-wise score:
+\[
+    \hat y=\underbrace{\theta_{\text{weights}}^\top x}_{\text{weighted features}}+\underbrace{\theta_{\text{bias}}}_{\text{offset}}.
+\]
+``Linear'' refers to the chosen features.
+Adding nonlinear engineered features can create nonlinear relationships in raw-input space while the model remains linear in its parameters.
+\paragraph{Logistic regression} passes the same score through a sigmoid to model a binary probability.
+\[
+    \hat y = \frac{1}{1 + e^{-(\theta_{\text{weights}}^\top x + \theta_{\text{bias}})}}
+\]
+
+
+
+\section{Support Vector Machines and Kernels}
+\label{sec:models-support-vector-machines-and-kernels}
+Support Vector Machine (SVM) draws a decision line between classes in the feature space.
+We aim to maximise the margin between the \textit{Support Vectors}, which are the closest datapoints either side of the line, and the decision line. 
+This decision line is a hyperplane in an N-dimensional space, but just imagine it as drawing lines.
+
+
+\paragraph{Linear vs. Non-linear SVM}
+Linear SVM draws a straight decision boundary in the original feature space. Non-linear SVM uses kernels to construct curved decision boundaries, allowing classes that cannot be separated by a straight line to be distinguished.
+
+
+\paragraph{Hard vs. Soft}
+Hard SVM requires decision lines to exactly differentiate between classes, while soft SVM allows for overlap by penalising overlap weakly with a regularisation parameter.
+A linear soft-margin SVM trades margin size against hinge-loss violations:
+\[
+    \min_{\theta_{\text{weights}},\theta_{\text{bias}}}
+    \underbrace{\frac12\|\theta_{\text{weights}}\|_2^2}_{\text{prefer a wider margin / smaller weights}}
+    +
+    \underbrace{C\sum_{i=1}^{N_{\text{examples}}}
+    \max\!\left(0,1-y_i(\theta_{\text{weights}}^\top x_i+\theta_{\text{bias}})\right)}_{\text{penalise margin violations}}.
+\]
+The first term is an L2-style parameter preference, directly linking the SVM objective to \cref{sec:stability-regularisation-l1-and-l2}.
+Larger $C$ makes training violations more expensive relative to margin width.
+
+\paragraph{Support Vector Regression (SVR)}
+SVR applies the same principle to continuous targets rather than classes.
+Instead of separating classes, we fit a function with an $\epsilon$-wide tolerance around it. 
+Predictions within this tolerance incur no loss, while errors outside it are penalised.
+
+
+\paragraph{Kernels}
+When data cannot be separated by a flat line (e.g., one group of points forms a circle inside another group), SVM uses kernel functions (such as Polynomial or Radial Basis Function / RBF kernels). 
+When temporarily working in a different feature space, the possibility of drawing a differentiating line is higher. 
+The \textit{kernel trick} mathematically projects the data into a higher-dimensional space where a linear hyperplane can separate them.
+
+A kernel replaces explicit feature construction with an inner product in a intermediate feature space:
+\[
+    \underbrace{k(x,x')}_{\text{similarity used by the model}}
+    =
+    \left\langle
+    \underbrace{\phi(x)}_{\text{implicit features}},
+    \phi(x')
+    \right\rangle.
+\]
+A linear separator in that feature space can therefore become nonlinear in the original coordinates.
+\figpdf[.9\textwidth]{kernel_feature_map}{A nonlinear boundary in raw coordinates can become simple after a feature transformation; kernels can compute some such similarities without explicitly materialising the feature map.}
+
+
+
+\section{Neural Networks}
+\label{sec:models-neural-networks-and-nonlinear-activations}
+You will hear a lot about Neural networks, and their descendants (RNNs, CNNs, etc.) and I will now introduce their smallest componant. 
+Their \textit{LEGO bricks}, from which they are all built from.
+
+\subsection{Neuron}
+A neuron is the fundamental computational unit of a neural network.
+It receives input values, multiplies by a learned weight, adds a bias, and passes the result through an \textit{activation function}.
+\[
+    \underbrace{h}_{\text{neuron output}}
+    =
+    \underbrace{\phi}_{\text{activation}}
+    \left(
+        \underbrace{\sum_{i=1}^{d} \theta_i x_i}_{\text{weighted inputs}}
+        +
+        \underbrace{\theta_{\text{bias}}}_{\text{offset}}
+    \right).
+\]
+The weights determine how strongly each input influences the output, while the activation function determines how the combined signal is transformed.
+
+\paragraph{Activation Functions}
+The activation functions are where Neural Networks derive their non-linearity.
+Sigmoid/tanh saturate at large magnitude, ReLU keeps a constant positive-side derivative but can create inactive units, GELU gives a smooth input-dependent gate-like response.
+Activation choice interacts with initialisation and gradient scale in \cref{sec:stability-xavier-glorot-and-he-kaiming-initialisation}.
+\figpdf[.81\textwidth]{activations}{Common nonlinearities differ mainly in saturation, zeroing behaviour and local derivative scale.}
+
+\begin{itemize}
+    \item \textbf{Linear (Identity):} Returns the input unchanged. Common in regression output layers. $f(x)=x$.
+
+    \item \textbf{Binary Step:} Outputs $0$ or $1$ depending on whether the input crosses a threshold. Used in classical perceptrons, but unsuitable for ordinary gradient-based training. $f(x)=\begin{cases}1 & x\geq0\\0 & x<0\end{cases}$.
+
+    \item \textbf{Sigmoid:} Squashes values into $(0,1)$, useful for binary classification probabilities and gating mechanisms. Can suffer from vanishing gradients. $f(x)=\frac{1}{1+e^{-x}}$.
+
+    \item \textbf{Tanh:} Squashes values into $(-1,1)$, providing zero-centred outputs. Historically common in RNNs and LSTMs. $f(x)=\tanh(x)$.
+
+    \item \textbf{ReLU (Rectified Linear Unit):} Sets negative values to zero and leaves positive values unchanged. Computationally cheap and widely used in neural networks, but can produce permanently inactive neurons. $f(x)=\max(0,x)$.
+
+    \item \textbf{Leaky ReLU:} Like ReLU, but allows a small negative slope to reduce the risk of inactive neurons. $f(x)=\max(\alpha x,x)$, where $0<\alpha<1$.
+
+    \item \textbf{PReLU (Parametric ReLU):} Like Leaky ReLU, but learns the negative slope $\alpha$ during training. $f(x)=\max(\alpha x,x)$.
+
+    \item \textbf{ELU (Exponential Linear Unit):} Behaves like ReLU for positive inputs but smoothly saturates towards $-\alpha$ for negative inputs. $f(x)=\begin{cases}x & x>0\\\alpha(e^x-1) & x\leq0\end{cases}$.
+
+    \item \textbf{SELU (Scaled ELU):} A scaled ELU designed to encourage self-normalising behaviour under specific architectural and initialisation conditions. $f(x)=\lambda\begin{cases}x & x>0\\\alpha(e^x-1) & x\leq0\end{cases}$.
+
+    \item \textbf{GELU (Gaussian Error Linear Unit):} Smoothly gates inputs according to their magnitude, rather than applying ReLU's hard threshold. Common in Transformers such as BERT and GPT-2. $f(x)=x\Phi(x)$, where $\Phi$ is the standard normal CDF.
+
+    \item \textbf{SiLU (Sigmoid Linear Unit / Swish):} Smooth activation that multiplies the input by its sigmoid. Used in architectures such as EfficientNet and Llama's SwiGLU feed-forward layers. $f(x)=x\sigma(x)$.
+
+    \item \textbf{Swish:} Generalised SiLU with an adjustable parameter $\beta$ controlling the sigmoid gate. $f(x)=x\sigma(\beta x)$.
+
+    \item \textbf{Mish:} Smooth, non-monotonic activation combining the input with a softplus transformation. $f(x)=x\tanh(\ln(1+e^x))$.
+
+    \item \textbf{Softplus:} Smooth approximation to ReLU that never produces exactly zero for finite inputs. $f(x)=\ln(1+e^x)$.
+
+    \item \textbf{Softsign:} Smoothly compresses values into $(-1,1)$, with slower saturation than tanh. $f(x)=\frac{x}{1+|x|}$.
+
+    \item \textbf{Softmax:} Converts a vector of logits into a probability distribution whose elements sum to $1$. Common in multiclass classification and attention. $f(x)_i=\frac{e^{x_i}}{\sum_j e^{x_j}}$.
+
+    \item \textbf{GLU (Gated Linear Unit):} Multiplies one learned projection by the sigmoid of another, allowing the network to gate information. $f(x)= (W_a x+b_a)\odot\sigma(W_b x+b_b)$.
+
+    \item \textbf{SwiGLU:} Gated activation combining SiLU with another learned projection. Used in modern Transformer feed-forward networks, including Llama. $f(x)=\operatorname{SiLU}(W_a x+b_a)\odot(W_b x+b_b)$.
+\end{itemize}
+
+
+\subsection{Layers}
+We combine many neurons into layers and stack them in sequence.
+This gives interesting dimensions of variability, because we can:
+\begin{itemize}
+    \item \textbf{Add Non-Neuron functions} like Pooling, Attention, Dropout, etc.
+    \item \textbf{Loop Layers} by passing outputs back as inputs,
+    \item \textbf{Ensure Statistical Properties} like normalisation, 
+    \item \textbf{Vary Width \& Depth} Vary the number of neurons per layer and the number of layers in the network 
+    \item \textbf{Connect Layers Differently} Skip layers, branch into parallel paths, or combine multiple representations.
+    \item \textbf{Share Weights} Reuse the same learned parameters across different positions or time steps.
+\end{itemize}
+
+This gives a lot of dimensions researchers can explore, and \textit{many} permutations to investigate.
+Heuristically, the study of neural networks is either adding to this list through discovery or experimentally trial-and-error-ing a new permutation.
+
+\subsubsection{Common Layer Types}
+\begin{itemize}
+    \item \textbf{Dense / Fully Connected:} Connects every input feature to every output neuron. Common in Multi-Layer Perceptrons (MLPs) and classification heads.
+    \item \textbf{Convolutional:} Applies small, shared filters across local regions of an input. Common in CNNs for images, audio, and other structured signals.
+    \item \textbf{Pooling:} Reduces the spatial or sequence dimensions by aggregating values, commonly using maximum or average pooling.
+    \item \textbf{Recurrent:} Reuses a state-update operation across sequence steps, allowing previous information to influence later outputs. Used in RNNs, LSTMs, and GRUs.
+    \item \textbf{Embedding:} Maps discrete identifiers, such as token IDs, to learned continuous vectors.
+    \item \textbf{Attention:} Computes weighted combinations of representations based on their relevance to one another. Central to Transformers.
+    \item \textbf{Normalisation:} Rescales or normalises intermediate activations to improve training behaviour. Examples include Batch Normalisation, Layer Normalisation, and RMSNorm.
+    \item \textbf{Dropout:} Randomly masks activations during training to reduce overfitting. Typically disabled during inference.
+    \item \textbf{Residual / Skip Connection:} Adds an earlier representation to a later one, allowing information and gradients to bypass intermediate transformations.
+    \item \textbf{Gated:} Controls information flow using learned multiplicative gates. Common in LSTMs, GRUs, and modern Transformer feed-forward blocks.
+    \item \textbf{Upsampling:} Increases the spatial resolution of a representation. Common in image generation, segmentation, and decoder architectures.
+    \item \textbf{Output / Projection:} Maps an internal representation into the required output dimension, such as class logits or vocabulary scores.
+\end{itemize}
+
+\section{Model assumptions and inductive biases}
+\label{sec:models-model-assumptions-and-inductive-biases}
+\Cref{sec:nfl-inductive-bias-the-assumptions-that-make-learning-possible} 
+\small
+\begin{longtable}{@{}L{.22\linewidth}L{.44\linewidth}L{.25\linewidth}@{}}
+\caption{Model families, their structural preference, and a representative useful regime.}\label{tab:model_biases}\\
+\toprule
+Model & Structural preference / assumption & Potential useful setting \\
+\midrule
+\endfirsthead
+\toprule
+Model & Structural preference / assumption & Potential useful setting \\
+\midrule
+\endhead
+Linear / logistic regression & Chosen features combine additively in an affine score & Interpretable baseline effects \\
+KNN & Nearby observations should have similar targets & Local smooth structure \\
+Kernel SVM & A chosen similarity creates a useful separating feature space & Nonlinear boundaries, moderate data \\
+Decision tree & Hierarchical thresholds capture useful interactions & Heterogeneous tabular relations \\
+Random forest & Averaging decorrelated trees reduces instability & Nonlinear tabular baselines \\
+Gradient boosting & Sequential corrections improve a chosen objective & Structured/tabular data \\
+PCA & High-variance linear directions are useful & Compression/exploration \\
+Gaussian process & Kernel covariance describes function similarity & Small-data regression with uncertainty \\
+MLP & Learned nonlinear compositions capture the relation & General vector inputs \\
+CNN & Local patterns repeat across positions & Images/gridded signals \\
+RNN / GRU / LSTM & Recurrent state summarises useful past context & Sequences/streaming \\
+Transformer & Content-dependent token interactions matter & Context-rich sequence/multimodal tasks \\
+GNN & Graph connectivity defines relevant neighbours & Molecules/relational systems \\
+SSM / Mamba & Long history can be compressed into evolving state & Long or streaming sequences \\
+Autoencoder / VAE & Reconstruction preserves useful latent structure & Compression/generative latents \\
+GAN / diffusion / flow & Different generative mechanisms match complex data distributions & Sample/density modelling \\
+Mixture of experts & Different inputs benefit from specialist subnetworks & Large conditional-capacity systems \\
+Siamese / contrastive & Related examples should be close in learned space & Retrieval/few-shot tasks \\
+\bottomrule
+\end{longtable}
+\normalsize

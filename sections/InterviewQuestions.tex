@@ -1,0 +1,36 @@
+\chapter{Interview Questions}
+
+When would you trust CH vs silhouette vs elbow?
+
+elbow heuristic (“argmin second difference”) often picks endpoints (they got k=10). That’s a known failure mode.
+
+If you weren’t allowed to inspect source, how would you infer “latent + nonlinearity”?- Good: correlation + PCA spectrum + conditional independence tests; compare marginals to Gaussian; maybe fit ICA / factor model residuals.
+- Bad: “I’d just read _W and _A.”
+
+How would you test heavy tails robustly?- Good: quantiles/QQ plots; tail index estimates; winsorized moments; compare kurtosis stability vs sample size.
+- Bad: “Skew/kurtosis once is enough.”
+
+
+Why does silhouette often choose k=2 on Iris?- Good: strong separation of one species vs the others; silhouette favors coarse separation.
+- Bad: “Because Iris has 2 clusters.”
+
+
+Where does the one-step MSE come from: quantization or sequence model? How would you separate them?- Good: measure reconstruction error of tokenizer alone (decode(encode(Y))) vs prediction error; ablations with oracle next token.
+- Bad: “It’s the bigram’s fault.”
+
+Q: “Why outer join and not inner?”  
+- Good: “Outer lets us detect missingness across sources; inner would drop partial records and hide data quality issues.”
+- Bad: “So we keep everything.”
+
+Explain the Adam optimizer. What do the betas do?
+
+Tell me something that you have a different perspective on that is against the consencus. 
+
+“What does Fisher-Z test actually test, and when is it valid?”- Good: It tests conditional independence under (approx) Gaussian/linear assumptions; otherwise it’s miscalibrated; discuss alternatives (HSIC, kernel CI).
+- Bad: “It checks dependence generally.”
+
+Q5: “Earlier you mentioned DeepSpeed + sharding. Which ZeRO stage would you pick for 10B params on 128 GPUs, and why?”     Interview with Deeter Analytics…  
+- Good: Concrete: ZeRO-2/3 tradeoffs; optimizer state partitioning; activation checkpointing; comm overlap; throughput vs memory.
+- Bad: Vague repetition of “split matrix across GPUs.”
+
+“Why could PCA help KMeans? Give a concrete failure mode without PCA.”

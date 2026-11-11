@@ -1,0 +1,237 @@
+\chapter{Post-Training Generalisation}
+\label{chap:Downstream Post-Training Generalisation}
+Often, a model is trained (at great cost) and needs to either \textit{specialise} to a subsection of the data, which was under-represented in the training, or \textit{generalise} to a new, unseen set of data.
+When designing this kind of procedure, we need to ask ourselves \textit{what is shared, what changed, and how much of the model should be allowed to adapt?}
+
+
+\section{Transfer Learning}
+\label{sec:adaptation-transfer-learning-reuse-what-the-model-has-learned}
+
+When \textit{transferring} to a new task, the main design choice is how much of the pretrained model we allow to change.
+
+\begin{calloutmemoryhook}
+    In post-training generalisation, overfitting is basically forgetting.
+\end{calloutmemoryhook}
+
+A model is \textbf{tuned} when training is continued from where the main training ended, normally with some carefully curated dataset.
+For example, an image model may be found online, and further trained on a curated dataset of images in the style of Disney Animations, leading to a model which has \textit{specialised} in Disney's style, while retaining a lot of the general image model capabilities of the parent model.
+
+A \textbf{Prediction Head} is a small layer on the end of a model which is added to handle a specific task. 
+For example, imagine training a model to predict house prices and then wanting to predict the probability of a house selling in the next year. 
+The problems share a lot of information, and so it may be worth just replacing the final layer of the house-price model and training just that layer on the new probability-of-sale data.
+
+\textbf{Negative transfer} means that your post-trained model performs worse than your pre-trained model.
+
+\begin{calloutmemoryhook}
+    The word \textit{Fine-Tuning} should never have been invented, it just means \textit{continued training on custom data}.
+\end{calloutmemoryhook}
+
+\begin{table}[htbp]
+    \centering
+    \small
+    \begin{tabularx}{\linewidth}{@{}L{.19\linewidth}YYY@{}}
+    \toprule
+    Strategy & What changes? & Main trade-off & Applications \\
+    \midrule
+
+    \textbf{Frozen}
+    &
+    The main model is kept the same, and a small secondary model is duct-taped onto the end, creating a specialised \textit{prediction head}.
+    &
+    Very cheap to train and retains the original representations, but the main model cannot adapt to the new task.
+    &
+    Small datasets where the pretrained features are already useful. E.g.\ adding a classifier to a pretrained image encoder.
+    \\
+
+    \addlinespace
+    \textbf{Fully Tuned}
+    &
+    The entire model's training is continued on the new dataset. A prediction head is optional.
+    &
+    Maximum flexibility but highest cost, greater risk of overfitting.
+    &
+    Large, specialised datasets or substantial domain shifts. E.g.\ adapting a general image model to medical imaging.
+    \\
+
+    \addlinespace
+    \textbf{Partially Tuned}
+    &
+    A prediction head is added, and a subset of the pretrained layers are also further trained, allowing the main model to specialise.
+    &
+    Balances adaptation against training cost, but performance depends on which layers are unfrozen.
+    &
+    Tasks where general low-level features remain useful but higher-level representations need adapting. E.g.\ retraining the final CNN blocks for a new classification task.
+    \\
+
+    \addlinespace
+    \textbf{Efficiently Tuned}
+    &
+    Special, highly efficient methods of continuing training which only train a small number of parameters.
+    &
+    Much lower trainable-parameter and optimiser-memory cost, but constrains how the model can adapt. Total compute savings depend on the method.
+    &
+    Adapting large models under limited memory or maintaining many specialised versions of one base model. E.g.\ LoRA fine-tuning of an LLM.
+    \\
+
+    \bottomrule
+    \end{tabularx}
+    \caption{Transfer learning is a continuum of adaptation capacity, trading training cost against the freedom to specialise pretrained representations.}
+\end{table}
+
+
+\subsection{Domain Adaptation}
+\label{sec:adaptation-domain-adaptation-the-data-distribution-changes}
+It is useful to think of domain adatation as \textit{which probability distribution (or combination) changed?}
+\begin{align}
+    \underbrace{P_S(x)\ne P_T(x),\;P_S(y\mid x)=P_T(y\mid x)}_{\text{covariate shift: inputs change, rule stays}},\\
+    \underbrace{P_S(y)\ne P_T(y),\;P_S(x\mid y)=P_T(x\mid y)}_{\text{label shift: class prevalence changes}},\\
+    \underbrace{P_S(y\mid x)\ne P_T(y\mid x)}_{\text{concept shift: prediction rule changes}}.
+\end{align}
+
+Under covariate shift, examples can be \textbf{reweighted} to represent the target input distribution.
+The input data itself can be adapted to fit the new distribution, like
+\[
+    \underbrace{\E_{P_T}[\ell]}_{\text{target risk}}
+    =
+    \underbrace{\E_{P_S}\!\left[
+    \frac{P_T(x)}{P_S(x)}\ell(f(x),y)
+    \right]}_{\text{source risk weighted toward target-like inputs}}.
+\]
+However, for small target regions (small classes, sparse prediction space, etc.) training on reweighted data just causes overfitting.
+
+\figpdf[.8\textwidth]{domain_shift}{Synthetic covariate shift in one input coordinate. This feature could be reweighted as the distribution is just a transform (changed from Normal to another Normal).}
+
+\begin{calloutmemoryhook}
+    Reweighting can fix input-frequency shift but it cannot fix a changed input-to-label rule, and breaks under class imbalance.
+\end{calloutmemoryhook}
+
+\subsection{Summary}
+\begin{calloutbias}
+    \begin{tabularx}{\linewidth}{@{}L{.23\linewidth}YY@{}}
+        \toprule
+        Approach & Shared structure assumed & Failure to test \\
+        \midrule
+        Frozen transfer & Source representation retains target signal & Target feature was suppressed upstream \\
+        Fine-tuning & Pretrained parameters are a useful starting point & Small target set overfits \\
+        Domain invariance & Some task-relevant features persist across domains & Alignment mixes different classes \\
+        Prototypical networks & Classes form meaningful embedding centroids & Classes are multimodal/overlapping \\
+        MAML & New tasks resemble meta-training tasks & Task family changes substantially \\
+        Zero-shot multimodal & Modalities share semantic geometry & Prompt/class semantics are ambiguous \\
+        LoRA & Adaptation is approximately low rank & Task needs broad independent parameter changes \\
+        \bottomrule
+    \end{tabularx}
+\end{calloutbias}
+
+\section{Specialise: Zero-shot learning}
+\label{sec:adaptation-zero-shot-learning-no-task-specific-labelled-examples}
+Zero-shot learning is only really available to Large Language/Image Models, because few other models generalise as well as them.
+It is done by changing the context that the model has available, rather than by changing weights.
+For a shared image/text embedding, classification can be ``choose the text description with highest cosine similarity'':
+\[
+    \hat y
+    =
+    \argmax_j
+    \underbrace{
+    \frac{f_\theta(x)^\top g_\phi(t_j)}{\|f_\theta(x)\|_2\|g_\phi(t_j)\|_2}
+    }_{\text{image--text directional similarity}}.
+\]
+Performance depends on the pre-training semantics, candidate class set and prompt wording.
+Zero-shot does not mean zero prior knowledge, it assumes that the specific application exists within the pre-training dataset, and all we need to do is \textit{prompt better}.
+
+\begin{calloutmemoryhook}
+    Prompting changes context, while fine-tuning changes persistent parameters.
+\end{calloutmemoryhook}
+
+
+\section{Specialise: Few-shot learning}
+\label{sec:adaptation-few-shot-learning-learn-from-very-few-examples}
+Few shot learning allows us to curate a small dataset and conduct further training with it.
+In the usual ``N-way K-shot'' terminology, an episode contains a small support set for each candidate class plus query examples for evaluation.
+Few-shot learning is an approach, not a learning mechanism, so it can mean metric learning, gradient-based adaptation, frozen embeddings, or in-context prompting.
+
+We reduce each class to a centroid:
+\[
+    \underbrace{c_{\text{class }j}}_{\text{class prototype}}
+    =
+    \frac{1}{N_{\text{support per class}}}
+    \sum_{x_i\in S_j}f_\theta(x_i),
+    \qquad
+    \hat y_{\text{query}}
+    =
+    \argmin_j d\!\left(f_\theta(x_{\text{query}}),c_{\text{class }j}\right).
+\]
+This only works if the learned geometry makes same-class examples cluster in a transferable way.
+\figpdf[.8\textwidth]{few_shot_prototypes}{Few labelled support examples define class prototypes; a query is classified by embedding-space proximity.}
+
+\section{Generalise: Meta-learning and MAML}
+\label{sec:adaptation-meta-learning-and-maml}
+Meta-learning trains across tasks so that a new related task can be adapted quickly.
+MAML makes that idea explicit by optimising query performance \emph{after} a task-specific support-set update:
+\[
+    \min_\theta
+    \sum_{j=1}^{N_{\text{tasks}}}
+    \mathcal L^{\text{query}}_j\!\left(
+    \underbrace{
+    \theta-\alpha\nabla_\theta\mathcal L^{\text{support}}_j(\theta)
+    }_{\theta'_j:\ \text{one task-adaptation step}}
+    \right).
+\]
+Exact differentiation through the inner update introduces second-order dependence.
+First-order variants drop that cost.
+The Hessian/second-order connection is in \cref{subsec:la-hessian,sec:optimisation-newton-s-method-and-other-second-order-methods}.
+
+
+
+\section{Specialise: Parameter Efficient Continued-Training}
+The general idea with Parameter Efficient Fine-Tuning (PEFT) is to avoid changing the large model instance.
+Activations, optimiser states and the other backpropagation objects are very large to store in memory, and most specialisation problems do not require scale.
+It's wasteful to train a full set of 1 billion parameters on 2000 examples!
+So, we transform the weights into a low dimension using various transforming methods. 
+We work in that lower dimensional space and then un-transform the results into the model.
+
+\subsection{Low Rank Adapters (LoRA)}
+\label{sec:adaptation-lora-a-parameter-efficient-adaptation-mechanism}
+LoRA freezes a pretrained weight matrix and learns a low-rank update:
+\[
+    \underbrace{\theta'_{\text{weights}}}_{\text{adapted matrix}}
+    =
+    \underbrace{\theta_{\text{weights}}}_{\text{frozen pretrained matrix}}
+    +
+    \underbrace{\theta_{\text{up}}\theta_{\text{down}}}_{\Delta\theta:\ \text{low-rank update}}.
+\]
+This changes the bottleneck to the cost of dimension reduction/expansion:
+\[
+    \underbrace{\theta_{\text{down}}}_{\text{compress}}
+    \in\R^{N_{\text{adaptation directions}}\times N_{\text{input features}}},
+    \qquad
+    \underbrace{\theta_{\text{up}}}_{\text{expand}}
+    \in\R^{N_{\text{output features}}\times N_{\text{adaptation directions}}}.
+\]
+The parameter saving is:
+\[
+    \underbrace{N_{\text{adaptation directions}}
+    \left(N_{\text{input features}}+N_{\text{output features}}\right)}_{\text{trainable LoRA parameters}}
+    \quad\text{vs.}\quad
+    \underbrace{N_{\text{input features}}N_{\text{output features}}}_{\text{full matrix parameters}}.
+\]
+The underlying assumption is that useful task adaptation lives in relatively few independent directions.
+Low trainable-parameter count does not imply every training/inference cost shrinks proportionally.
+
+
+\subsection{Quantised Low Rank Adapters (QLoRA)}
+\label{subsec:adaptation-qlora}
+QLoRA combines two different restrictions: keep the pretrained base model in a low-bit representation to save memory, while training LoRA adapters for task-specific change.
+Conceptually,
+\[
+    \underbrace{\text{quantised frozen base}}_{\text{cheap storage}}
+    +
+    \underbrace{\text{trainable low-rank update}}_{\text{adaptation capacity}}.
+\]
+Quantisation and low-rank adaptation solve different bottlenecks, so they compose naturally.
+Quantisation mechanics and their quality--memory trade-off are developed in \cref{sec:inference-quantisation}.
+
+\begin{calloutmemoryhook}
+    QLoRA compresses the frozen base, and LoRA restricts the trainable change.
+\end{calloutmemoryhook}
+
+
